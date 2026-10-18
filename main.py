@@ -69,6 +69,40 @@ def load_persona():
 
 HISTORY_LIMIT = 40
 history = []
+
+OFFSET_FILE = "last_offset.txt"
+HISTORY_FILE = "conversation.json"
+
+def load_offset():
+    """Which messages has she already answered? (survives restarts)"""
+    try:
+        with open(OFFSET_FILE) as f:
+            return int(f.read().strip())
+    except Exception:
+        return None
+
+def save_offset(value):
+    try:
+        with open(OFFSET_FILE, "w") as f:
+            f.write(str(value))
+    except Exception:
+        pass
+
+def load_history():
+    try:
+        with open(HISTORY_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+def save_history():
+    try:
+        with open(HISTORY_FILE, "w") as f:
+            json.dump(history[-HISTORY_LIMIT:], f)
+    except Exception:
+        pass
+
+history = load_history()
 owner_id = None  # the first person to message her becomes her one and only
 
 # --- Her brain ---
@@ -724,7 +758,7 @@ def main():
     print("Catalina is waking up...")
     print("Voice mode:", "ON (Hannah, with ears)" if HAS_FFMPEG else "OFF (ffmpeg missing)")
     print("Eyes and camera:", "ON" if HAS_FFMPEG else "OFF")
-    offset = None
+    offset = load_offset()
     while True:
         try:
             url = TELEGRAM_API + "/getUpdates?timeout=30"
@@ -734,7 +768,9 @@ def main():
                 data = json.loads(resp.read().decode("utf-8"))
             for update in data.get("result", []):
                 offset = update["update_id"] + 1
+                save_offset(offset)
                 handle(update)
+                save_history()
         except Exception as e:
             print("Polling error:", e)
             time.sleep(5)
