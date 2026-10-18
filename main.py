@@ -21,7 +21,18 @@ GROQ_STT = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_TTS_MODEL = "canopylabs/orpheus-v1-english"
 GROQ_TTS_VOICE = "hannah"
 GROQ_STT_MODEL = "whisper-large-v3-turbo"
-HAS_FFMPEG = shutil.which("ffmpeg") is not None
+def find_ffmpeg():
+    path = shutil.which("ffmpeg")
+    if path:
+        return path
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return None
+
+FFMPEG = find_ffmpeg()
+HAS_FFMPEG = FFMPEG is not None
 
 # --- Catalina's personality (edit persona.txt to change who she is) ---
 
@@ -109,7 +120,7 @@ def speak(text):
         with open(wav_path, "wb") as f:
             f.write(wav)
         subprocess.run(
-            ["ffmpeg", "-y", "-i", wav_path, "-c:a", "libopus", "-b:a", "48k", ogg_path],
+            [FFMPEG, "-y", "-i", wav_path, "-c:a", "libopus", "-b:a", "48k", ogg_path],
             capture_output=True, check=True, timeout=60)
         with open(ogg_path, "rb") as f:
             return f.read()
