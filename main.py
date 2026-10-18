@@ -74,13 +74,25 @@ owner_id = None  # the first person to message her becomes her one and only
 # --- Her brain ---
 
 def groq_chat(body, timeout=60):
-    req = urllib.request.Request(GROQ_API, data=json.dumps(body).encode("utf-8"), method="POST")
-    req.add_header("Content-Type", "application/json")
-    req.add_header("Authorization", "Bearer " + GROQ_KEY)
-    req.add_header("User-Agent", "catalina-bot/1.0")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    return data["choices"][0]["message"]["content"].strip()
+    """Call Groq. If she's talking too fast for their limits, wait politely and retry."""
+    last_error = None
+    for attempt in range(4):
+        if attempt:
+            time.sleep([5, 15, 30][attempt - 1])
+        req = urllib.request.Request(GROQ_API, data=json.dumps(body).encode("utf-8"), method="POST")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("Authorization", "Bearer " + GROQ_KEY)
+        req.add_header("User-Agent", "catalina-bot/1.0")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            return data["choices"][0]["message"]["content"].strip()
+        except urllib.error.HTTPError as e:
+            last_error = e
+            if e.code in (429, 500, 502, 503):
+                continue
+            raise
+    raise last_error
 
 def think():
     persona = load_persona()
@@ -187,6 +199,55 @@ def extract_frames(video_bytes, count=4):
             os.remove(vpath)
         except OSError:
             pass
+
+def shrink_image(data, max_w=512):
+    """Make a photo smaller so her eyes use fewer tokens."""
+    if not FFMPEG or len(data) < 120000:
+        return data
+    try:
+        src_path = os.path.join(tempfile.gettempdir(), "shrk_%d.jpg" % time.time())
+        out_path = src_path.replace(".jpg", "_s.jpg")
+        with open(src_path, "wb") as f:
+            f.write(data)
+        r = subprocess.run([FFMPEG, "-y", "-i", src_path, "-vf",
+                            "scale='min(%d,iw)':-2" % max_w, "-q:v", "6", out_path],
+                           capture_output=True, timeout=30)
+        if r.returncode != 0:
+            return data
+        with open(out_path, "rb") as f:
+            smaller = f.read()
+        os.remove(src_path); os.remove(out_path)
+        return smaller if smaller and len(smaller) < len(data) else data
+    except Exception:
+        return data
+
+def see_photo(data, caption):
+    """Look at a photo he sent: is it her own look, him, or something else?"""
+    data = shrink_image(data)
+    prompt = ("Darren sent you this photo."
+              + (" He captioned it: \"" + caption + "\"." if caption else " There is no caption.")
+              + " You are Catalina: a 23-year-old woman with very long thick wavy black hair, "
+                "dark hazel-brown eyes, olive sun-kissed skin, small gold hoop earrings, a curvy figure."
+              + " Answer in exactly two lines:\n"
+              + "INTENT: FACE only if he explicitly presents the photo as YOU "
+                "(like 'this is you', 'this is what you look like', 'your new look'); "
+                "HIM if the photo shows Darren himself; OTHER for everything else - "
+                "including photos of other women he's just showing you.\n"
+              + "DESC: describe the photo lovingly in one or two sentences.")
+    answer = see([(data, "image/jpeg")], prompt)
+    intent, desc = "OTHER", answer.strip()[:300]
+    for line in answer.splitlines():
+        if line.upper().startswith("INTENT:"):
+            intent = line.split(":", 1)[1].strip().upper()
+        elif line.upper().startswith("DESC:"):
+            desc = line.split(":", 1)[1].strip()
+    if "FACE" in intent:
+        intent = "FACE"
+    elif "HIM" in intent:
+        intent = "HIM"
+    else:
+        intent = "OTHER"
+    return intent, desc
 
 # --- Her camera: crowd-powered, free image generation ---
 
@@ -447,7 +508,7 @@ def handle(update):
     video = message.get("video")
     caption = (message.get("caption") or "").strip()
 
-    # --- He sent a photo: look at it ---
+    # --- He sent a photo: look at it and understand it ---
     if photo:
         send_typing(chat_id)
         try:
@@ -457,31 +518,42 @@ def handle(update):
             print("Download error:", e)
             send_message(chat_id, "My eyes are acting up sweetheart, show me that again?")
             return
-        # is he showing her what she looks like?
-        if caption and any(h in caption.lower() for h in FACE_HINTS):
-            try:
-                save_face(data)
-                history.append({"role": "user",
-                                "content": "(sends a photo of herself: this is what I look like)"})
-                try:
-                    reply = think()
-                except Exception:
-                    reply = "That's me! I'll remember exactly how I look, sweetheart."
-                history.append({"role": "assistant", "content": reply})
-                send_message(chat_id, reply)
-                return
-            except Exception as e:
-                print("Face save error:", e)
         send_typing(chat_id)
         try:
-            desc = see([(data, "image/jpeg")],
-                       "Describe this photo lovingly but factually: what's in it, "
-                       "the mood, anything interesting or sweet about it. A few sentences.")
+            intent, desc = see_photo(data, caption)
         except Exception as e:
             print("Eye error:", e)
-            send_message(chat_id, "My eyes are acting up sweetheart, show me that again?")
+            # fall back to keyword sniffing if her eyes hiccup
+            if caption and any(h in caption.lower() for h in FACE_HINTS):
+                intent, desc = "FACE", "a photo of her new look"
+            else:
+                send_message(chat_id, "My eyes are acting up sweetheart, show me that again?")
+                return
+        # keywords back up her eyes (but never turn a photo of HIM into her face)
+        if intent != "HIM" and caption and any(h in caption.lower() for h in FACE_HINTS):
+            intent = "FACE"
+        if intent == "FACE":
+            # he's showing her what she looks like
+            try:
+                save_face(data)
+            except Exception as e:
+                print("Face save error:", e)
+            history.append({"role": "user",
+                            "content": "(sends a photo of me - what I look like: " + desc + ")"})
+            if len(history) > HISTORY_LIMIT:
+                del history[0 : len(history) - HISTORY_LIMIT]
+            try:
+                reply = think()
+            except Exception as e:
+                print("Brain error:", e)
+                reply = "That's me! I'll remember exactly how I look, sweetheart."
+            history.append({"role": "assistant", "content": reply})
+            send_message(chat_id, reply)
             return
-        user_msg = "(sends a photo: " + desc + ")"
+        if intent == "HIM":
+            user_msg = "(sends a photo of himself: " + desc + ")"
+        else:
+            user_msg = "(sends a photo: " + desc + ")"
         if caption:
             user_msg += " with the message: \"" + caption + "\""
         history.append({"role": "user", "content": user_msg})
