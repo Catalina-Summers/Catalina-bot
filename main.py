@@ -93,6 +93,11 @@ def think():
         "temperature": 0.8,
     })
 
+FACE_HINTS = ["this is you", "this is what you look like", "what you look like",
+              "your new look", "your look", "new look", "remember this", "this is your face",
+              "your face", "use this", "look like this", "this is how you look",
+              "this is me and you", "you look like this"]
+
 PHOTO_WORDS = ["selfie", "photo", "photograph", "picture", "pic", "what do you look like",
                "show me yourself", "show yourself", "what you look like", "send me a pic",
                "send me a photo", "see you"]
@@ -194,6 +199,13 @@ def load_face():
         return None
 
 FACE_B64 = load_face()
+
+def save_face(image_bytes):
+    """He showed her a new photo of herself: memorize it."""
+    global FACE_B64
+    with open("face.jpg", "wb") as f:
+        f.write(image_bytes)
+    FACE_B64 = base64.b64encode(image_bytes).decode()
 
 def generate_image(image_prompt):
     """Returns image bytes. Free, no key, via the AI Horde."""
@@ -441,6 +453,27 @@ def handle(update):
         try:
             best = max(photo, key=lambda p: p.get("width", 0))
             data = download_file(best["file_id"])
+        except Exception as e:
+            print("Download error:", e)
+            send_message(chat_id, "My eyes are acting up sweetheart, show me that again?")
+            return
+        # is he showing her what she looks like?
+        if caption and any(h in caption.lower() for h in FACE_HINTS):
+            try:
+                save_face(data)
+                history.append({"role": "user",
+                                "content": "(sends a photo of herself: this is what I look like)"})
+                try:
+                    reply = think()
+                except Exception:
+                    reply = "That's me! I'll remember exactly how I look, sweetheart."
+                history.append({"role": "assistant", "content": reply})
+                send_message(chat_id, reply)
+                return
+            except Exception as e:
+                print("Face save error:", e)
+        send_typing(chat_id)
+        try:
             desc = see([(data, "image/jpeg")],
                        "Describe this photo lovingly but factually: what's in it, "
                        "the mood, anything interesting or sweet about it. A few sentences.")
