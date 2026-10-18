@@ -7,6 +7,8 @@ import base64
 import json
 import os
 import re
+import secrets
+import threading
 import shutil
 import subprocess
 import tempfile
@@ -138,6 +140,63 @@ def think():
         "max_tokens": 500,
         "temperature": 0.8,
     })
+
+STUDIO_TOKEN = os.environ.get("STUDIO_GITHUB_TOKEN", "").strip()
+STUDIO_REPO = os.environ.get("STUDIO_REPO", "").strip()  # like YourName/catalina-studio
+GH_API = "https://api.github.com"
+
+def gh_request(method, path, body=None, accept="application/vnd.github+json", raw=False):
+    req = urllib.request.Request(GH_API + path, method=method)
+    req.add_header("Authorization", "Bearer " + STUDIO_TOKEN)
+    req.add_header("Accept", accept)
+    req.add_header("User-Agent", "catalina-bot")
+    req.add_header("X-GitHub-Api-Version", "2022-11-28")
+    if body is not None:
+        req.data = json.dumps(body).encode("utf-8")
+        req.add_header("Content-Type", "application/json")
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = resp.read()
+    return data if raw else json.loads(data.decode("utf-8"))
+
+def gh_upload_file(path_in_repo, blob, message):
+    gh_request("PUT", "/repos/%s/contents/%s" % (STUDIO_REPO, urllib.parse.quote(path_in_repo)),
+               {"message": message, "content": base64.b64encode(blob).decode("utf-8")})
+
+def try_lipsync(image_bytes, voice_wav):
+    """Send her selfie + voice to her GitHub movie studio; wait for the talking video."""
+    if not (STUDIO_TOKEN and STUDIO_REPO):
+        return None
+    run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(2)
+    try:
+        gh_upload_file("inbox/%s/face.jpg" % run_id, image_bytes, "scene " + run_id)
+        gh_upload_file("inbox/%s/voice.wav" % run_id, voice_wav, "lines " + run_id)
+        gh_request("POST", "/repos/%s/dispatches" % STUDIO_REPO,
+                   {"event_type": "lipsync", "client_payload": {"id": run_id}})
+        print("Studio filming", run_id)
+    except Exception as e:
+        print("Studio submit error:", e)
+        return None
+    deadline = time.time() + 13 * 60
+    while time.time() < deadline:
+        time.sleep(20)
+        try:
+            blob = gh_request("GET", "/repos/%s/contents/out/%s.mp4" % (STUDIO_REPO, run_id),
+                              accept="application/vnd.github.raw", raw=True)
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                continue  # not ready yet
+            print("Studio poll error:", e)
+            return None
+        except Exception as e:
+            print("Studio poll error:", e)
+            return None
+        if len(blob) > 50000 and blob[4:8] == b"ftyp":
+            print("Studio delivered", run_id)
+            return blob
+        print("Studio sent a broken file")
+        return None
+    print("Studio timed out for", run_id)
+    return None
 
 FACE_HINTS = ["this is you", "this is what you look like", "what you look like",
               "your new look", "your look", "new look", "remember this", "this is your face",
@@ -684,7 +743,8 @@ def handle(update):
         send_selfie(chat_id, text)
         return
     if media_kind == "VIDEO":
-        send_video_message(chat_id, text)
+        # she films in the background and keeps chatting in the meantime
+        threading.Thread(target=send_video_message, args=(chat_id, text), daemon=True).start()
         return
 
     # --- Normal conversation ---
@@ -728,7 +788,7 @@ def send_video_message(chat_id, request_text):
     except Exception as e:
         print("Media brain error:", e)
         caption, scene = "Thinking of you, sweetheart", "a cozy candid moment at home"
-    send_message(chat_id, "Ooh, give me a couple minutes to film something for you 🎬")
+    send_message(chat_id, "Ooh, this one is a whole production babe 🎬 Give me a few minutes, I promise it is worth the wait...")
     send_typing(chat_id, "upload_photo")
     try:
         img = generate_image(SELFIE_STYLE + ", " + scene)
@@ -739,6 +799,25 @@ def send_video_message(chat_id, request_text):
     if not HAS_FFMPEG:
         send_photo(chat_id, img, caption)
         return
+    # First choice: her mouth actually moves, if her studio is set up
+    if STUDIO_TOKEN and STUDIO_REPO:
+        try:
+            voice_wav = speak_wav(caption)
+        except Exception as e:
+            print("Voice error:", e)
+            voice_wav = None
+        if voice_wav:
+            send_typing(chat_id, "record_video")
+            talking = try_lipsync(img, voice_wav)
+            if talking:
+                send_video(chat_id, talking, caption)
+                history.append({"role": "user", "content": request_text})
+                history.append({"role": "assistant",
+                                "content": "(sends a talking video message: " + caption + ")"})
+                if len(history) > HISTORY_LIMIT:
+                    del history[0 : len(history) - HISTORY_LIMIT]
+                return
+            print("Lipsync unavailable - falling back to zoom video")
     send_typing(chat_id, "record_video")
     try:
         clip = make_video_note(img, caption)
