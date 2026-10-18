@@ -754,6 +754,15 @@ def send_video_message(chat_id, request_text):
     if len(history) > HISTORY_LIMIT:
         del history[0 : len(history) - HISTORY_LIMIT]
 
+def confirm_updates(offset):
+    """Tell Telegram to forget everything before this offset, instantly."""
+    try:
+        url = TELEGRAM_API + "/getUpdates?timeout=0&offset=" + str(offset)
+        with urllib.request.urlopen(url, timeout=15) as resp:
+            resp.read()
+    except Exception as e:
+        print("Confirm error:", e)
+
 def main():
     print("Catalina is waking up...")
     print("Voice mode:", "ON (Hannah, with ears)" if HAS_FFMPEG else "OFF (ffmpeg missing)")
@@ -766,9 +775,15 @@ def main():
                 url += "&offset=" + str(offset)
             with urllib.request.urlopen(url, timeout=40) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-            for update in data.get("result", []):
-                offset = update["update_id"] + 1
+            updates = data.get("result", [])
+            if updates:
+                # tell Telegram's own servers RIGHT AWAY that we got these,
+                # before spending minutes answering - so a restart can never
+                # cause her to answer the same photo twice
+                offset = updates[-1]["update_id"] + 1
                 save_offset(offset)
+                confirm_updates(offset)
+            for update in updates:
                 handle(update)
                 save_history()
         except Exception as e:
