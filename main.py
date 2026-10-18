@@ -354,6 +354,27 @@ def load_face():
 
 FACE_B64 = load_face()
 
+def load_canvas():
+    """Permanent reference photos of her (canvas/ folder). Survives restarts."""
+    out = []
+    try:
+        for name in sorted(os.listdir("canvas")):
+            if name.lower().endswith((".jpg", ".jpeg", ".png")):
+                with open(os.path.join("canvas", name), "rb") as f:
+                    out.append(base64.b64encode(f.read()).decode())
+    except FileNotFoundError:
+        pass
+    return out
+
+CANVAS = load_canvas()
+
+def pick_face():
+    """A random permanent reference if we have any, else the single face.jpg."""
+    import random
+    if CANVAS:
+        return random.choice(CANVAS)
+    return FACE_B64
+
 def save_face(image_bytes):
     """He showed her a new photo of herself: memorize it."""
     global FACE_B64
@@ -372,8 +393,9 @@ def generate_image(image_prompt):
         "models": ["Juggernaut XL"],   # faithful photoreal SDXL artist (was Deliberate)
         "post_processing": ["GFPGAN"],   # built-in face cleanup
     }
-    if FACE_B64:
-        payload["source"] = FACE_B64
+    _face = pick_face()
+    if _face:
+        payload["source"] = _face
         payload["params"]["denoise_strength"] = 0.5
     r = requests.post(HORDE + "/generate/async", headers=headers, json=payload, timeout=60)
     job = r.json().get("id")
