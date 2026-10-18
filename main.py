@@ -110,10 +110,10 @@ FACE_HINTS = ["this is you", "this is what you look like", "what you look like",
               "your face", "use this", "look like this", "this is how you look",
               "this is me and you", "you look like this"]
 
-PHOTO_WORDS = ["selfie", "photo", "photograph", "picture", "pic", "what do you look like",
-               "show me yourself", "show yourself", "what you look like", "send me a pic",
-               "send me a photo", "see you"]
-VIDEO_WORDS = ["video", "clip", "movie of you", "film"]
+PHOTO_WORDS = ["selfie", "photo", "photograph", "picture", "pic",
+               "what do you look like", "show me yourself", "show yourself",
+               "let me see you", "can i see you"]
+VIDEO_WORDS = ["video", "video message", "movie of you", "clip of you"]
 
 def decide_media(text):
     """Does he want a photo, a video, or just to chat? (keyword sniff)"""
@@ -474,9 +474,22 @@ def start_heartbeat():
 
 # --- Handling messages ---
 
+MEDIA_NOUNS = ["selfie", "photo", "photograph", "picture", "pic", "video",
+               "video message", "clip of you", "movie of you"]
+ASK_CUES = ["send", "show me", "show yourself", "can i see", "let me see",
+            "give me", "take a", "make me", "snap"]
+EXPLICIT_ASKS = ["what do you look like", "show yourself", "show me yourself",
+                 "selfie please", "send a selfie", "video please", "send a video",
+                 "let me see you", "can i see you"]
+
 def wants_media(text):
+    """True ONLY when he explicitly asks her for a photo or video."""
     lower = text.lower()
-    return any(k in lower for k in MEDIA_KEYWORDS)
+    if any(k in lower for k in EXPLICIT_ASKS):
+        return True
+    has_noun = any(n in lower for n in MEDIA_NOUNS)
+    has_cue = any(c in lower for c in ASK_CUES)
+    return has_noun and has_cue
 
 def deliver_reply(chat_id, reply, reply_as_voice):
     if reply_as_voice:
