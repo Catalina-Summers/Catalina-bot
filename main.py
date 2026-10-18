@@ -369,7 +369,8 @@ def generate_image(image_prompt):
         "prompt": image_prompt,
         "params": {"width": 448, "height": 640, "steps": 20, "n": 1, "seed": HORDE_SEED},
         "nsfw": False, "censor_nsfw": False, "r2": True,
-        "models": ["Deliberate"],
+        "models": ["Juggernaut XL"],   # faithful photoreal SDXL artist (was Deliberate)
+        "post_processing": ["GFPGAN"],   # built-in face cleanup
     }
     if FACE_B64:
         payload["source"] = FACE_B64
