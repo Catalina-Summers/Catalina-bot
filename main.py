@@ -29,7 +29,7 @@ GROQ_STT = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_TTS_MODEL = "canopylabs/orpheus-v1-english"
 GROQ_TTS_VOICE = "hannah"
 GROQ_STT_MODEL = "whisper-large-v3-turbo"
-HORDE = "https://aihorde.net/api/v2"
+HORDE = "https://stablehorde.net/api/v2"   # old domain: no cloudflare wall, same API
 
 # Her look: fixed appearance + fixed seed = the same girl in every photo.
 LOOK = ("a stunning 23-year-old woman with very long thick wavy black hair, "
@@ -367,7 +367,7 @@ def generate_image(image_prompt):
                "Client-Agent": "catalina-bot:1.0:standalone"}
     payload = {
         "prompt": image_prompt,
-        "params": {"width": 512, "height": 768, "steps": 20, "n": 1, "seed": HORDE_SEED},
+        "params": {"width": 448, "height": 640, "steps": 20, "n": 1, "seed": HORDE_SEED},
         "nsfw": False, "censor_nsfw": False, "r2": True,
         "models": ["Deliberate"],
     }
