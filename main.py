@@ -392,19 +392,40 @@ def load_canvas():
 
 CANVAS = load_canvas()
 
+LATEST_REF = None
+
+def load_latest_ref():
+    """The photo Darren most recently endorsed as 'this is you' - paint from it first."""
+    try:
+        with open("canvas/ref_latest.jpg", "rb") as f:
+            return base64.b64encode(f.read()).decode()
+    except FileNotFoundError:
+        return None
+
+LATEST_REF = load_latest_ref()
+
 def pick_face():
-    """A random permanent reference if we have any, else the single face.jpg."""
+    """Prefer the photo he most recently endorsed, else a permanent reference."""
+    if LATEST_REF:
+        return LATEST_REF
     import random
     if CANVAS:
         return random.choice(CANVAS)
     return FACE_B64
 
 def save_face(image_bytes):
-    """He showed her a new photo of herself: memorize it."""
-    global FACE_B64
+    """He showed her a new photo of herself: memorize and paint from it from now on."""
+    global FACE_B64, LATEST_REF
     with open("face.jpg", "wb") as f:
         f.write(image_bytes)
     FACE_B64 = base64.b64encode(image_bytes).decode()
+    try:
+        os.makedirs("canvas", exist_ok=True)
+        with open("canvas/ref_latest.jpg", "wb") as f:
+            f.write(image_bytes)
+        LATEST_REF = FACE_B64
+    except OSError as e:
+        print("Could not save preferred reference:", e)
 
 def generate_image(image_prompt):
     """Returns image bytes. Free, no key, via the AI Horde."""
@@ -416,12 +437,12 @@ def generate_image(image_prompt):
                    "seed": str(random.randint(1, 999999999))},  # Horde wants the seed as a string
         "nsfw": False, "censor_nsfw": False, "r2": True,
         "models": ["Juggernaut XL", "Realistic Vision"],   # photoreal pair, whoever is free paints her
-        "post_processing": ["GFPGAN"],   # built-in face cleanup
+        "post_processing": ["CodeFormers"],   # gentle face cleanup, keeps her real features
     }
     _face = pick_face()
     if _face:
         payload["source"] = _face
-        payload["params"]["denoise_strength"] = 0.45
+        payload["params"]["denoise_strength"] = 0.33
     r = requests.post(HORDE + "/generate/async", headers=headers, json=payload, timeout=60)
     job = r.json().get("id")
     if not job:
