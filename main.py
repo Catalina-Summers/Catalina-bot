@@ -194,8 +194,11 @@ def try_lipsync(image_bytes, voice_wav):
     try:
         gh_upload_file("inbox/%s/face.jpg" % run_id, image_bytes, "scene " + run_id)
         gh_upload_file("inbox/%s/voice.wav" % run_id, voice_wav, "lines " + run_id)
-        gh_request("POST", "/repos/%s/dispatches" % STUDIO_REPO,
-                   {"event_type": "lipsync", "client_payload": {"id": run_id}})
+        try:
+            gh_request("POST", "/repos/%s/dispatches" % STUDIO_REPO,
+                       {"event_type": "lipsync", "client_payload": {"id": run_id}})
+        except ValueError:
+            pass  # GitHub replies 204 with an empty body on success
         print("Studio filming", run_id)
     except Exception as e:
         print("Studio submit error:", e)
@@ -427,8 +430,38 @@ def save_face(image_bytes):
     except OSError as e:
         print("Could not save preferred reference:", e)
 
+
+def studio_selfie(image_prompt):
+    """Her film studio paints the scene from her master photo and transplants her B-face."""
+    run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(2)
+    gh_upload_file("inbox/%s/request.json" % run_id,
+                   json.dumps({"prompt": image_prompt}).encode("utf-8"),
+                   "selfie request " + run_id)
+    try:
+        gh_request("POST", "/repos/%s/dispatches" % STUDIO_REPO,
+                   {"event_type": "faceswap", "client_payload": {"id": run_id}})
+    except ValueError:
+        pass  # GitHub replies 204 with an empty body on success
+    print("Studio shooting", run_id)
+    deadline = time.time() + 20 * 60
+    while time.time() < deadline:
+        time.sleep(20)
+        try:
+            return gh_request("GET", "/repos/%s/contents/out/%s.jpg" % (STUDIO_REPO, run_id),
+                              accept="application/vnd.github.raw", raw=True)
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                continue  # not ready yet
+            raise
+    raise RuntimeError("studio selfie timed out")
+
 def generate_image(image_prompt):
-    """Returns image bytes. Free, no key, via the AI Horde."""
+    """Returns image bytes. Her studio paints it; the direct camera is the backup."""
+    if STUDIO_TOKEN and STUDIO_REPO:
+        try:
+            return studio_selfie(image_prompt)
+        except Exception as e:
+            print("Studio selfie failed, using her direct camera:", e)
     headers = {"Content-Type": "application/json", "apikey": "0000000000",
                "Client-Agent": "catalina-bot:1.0:standalone"}
     payload = {
