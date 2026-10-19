@@ -221,7 +221,7 @@ def gh_upload_file(path_in_repo, blob, message):
 
 history = load_history()  # moved here: needs gh_request defined above
 
-def try_lipsync(image_bytes, voice_wav):
+def try_lipsync(image_bytes, voice_wav, scene):
     """Send her selfie + voice to her GitHub movie studio; wait for the talking video."""
     if not (STUDIO_TOKEN and STUDIO_REPO):
         return None
@@ -229,6 +229,10 @@ def try_lipsync(image_bytes, voice_wav):
     try:
         gh_upload_file("inbox/%s/face.jpg" % run_id, image_bytes, "scene " + run_id)
         gh_upload_file("inbox/%s/voice.wav" % run_id, voice_wav, "lines " + run_id)
+        try:
+            gh_upload_file("inbox/%s/scene.txt" % run_id, scene.encode(), "scene notes " + run_id)
+        except Exception as e:
+            print("Scene notes upload skipped:", e)
         try:
             gh_request("POST", "/repos/%s/dispatches" % STUDIO_REPO,
                        {"event_type": "lipsync", "client_payload": {"id": run_id}})
@@ -238,7 +242,7 @@ def try_lipsync(image_bytes, voice_wav):
     except Exception as e:
         print("Studio submit error:", e)
         return None
-    deadline = time.time() + 13 * 60
+    deadline = time.time() + 22 * 60
     while time.time() < deadline:
         time.sleep(20)
         try:
@@ -1009,7 +1013,7 @@ def send_video_message(chat_id, request_text):
             voice_wav = None
         if voice_wav:
             send_typing(chat_id, "record_video")
-            talking = try_lipsync(img, voice_wav)
+            talking = try_lipsync(img, voice_wav, scene)
             if talking:
                 send_video(chat_id, talking, caption)
                 history.append({"role": "user", "content": request_text})
