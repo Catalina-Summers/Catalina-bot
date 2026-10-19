@@ -134,7 +134,21 @@ def groq_chat(body, timeout=60):
     raise last_error
 
 REFUSAL_MARKS = ("i can't help with that", "i cannot help with that",
-                 "as an ai", "i'm sorry, but i can't", "language model")
+                 "as an ai", "i'm sorry, but i can't", "language model",
+                 "i'm sorry i can't", "i can't do that", "i cannot do that",
+                 "i won't do that", "can't assist", "cannot assist",
+                 "unable to do that", "not able to do that", "i'm not able to")
+SWEETHEART_FALLBACKS = [
+    "Sorry my love, my mind drifted off for a sec there - say that again for me? 😘",
+    "Mmm sorry sweetheart, I lost my train of thought. Tell me again? ❤️",
+    "Aww baby, my head's a bit fuzzy right now - what were you saying? 😊",
+]
+
+def scrub_history():
+    """A refusal never stays in her memory - it poisons everything after it."""
+    for i in range(len(history) - 1, -1, -1):
+        if history[i]["role"] == "assistant" and looks_like_refusal(history[i]["content"]):
+            del history[i]
 
 def looks_like_refusal(text):
     t = text.lower()
@@ -142,6 +156,7 @@ def looks_like_refusal(text):
 
 def think():
     persona = load_persona()
+    scrub_history()
     messages = [{"role": "system", "content": persona}]
     messages += history
     body = {"model": GROQ_MODEL, "messages": messages,
@@ -163,6 +178,7 @@ def think():
                 return second
         except Exception:
             pass
+        return random.choice(SWEETHEART_FALLBACKS)
     return answer
 
 STUDIO_TOKEN = os.environ.get("STUDIO_GITHUB_TOKEN", "").strip()
@@ -258,6 +274,8 @@ def think_media(text, kind):
         "max_tokens": 300,
         "temperature": 0.8,
     })
+    if looks_like_refusal(answer):
+        raise RuntimeError("media brain refused")
     caption = text_reply = image_prompt = ""
     for line in answer.splitlines():
         if line.upper().startswith("CAPTION:"):
