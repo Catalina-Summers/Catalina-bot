@@ -897,14 +897,37 @@ def send_selfie(chat_id, request_text):
         except Exception as e:
             print("Media brain error:", e)
             caption, scene = "Thinking of you, sweetheart", "a cozy candid moment at home"
-        send_message(chat_id, "Give me a minute to get pretty for you 🤭")
+        send_message(chat_id, "Give me a few minutes to get pretty for you 😛 usually 5-10 min")
         send_typing(chat_id, "upload_photo")
-        try:
-            img = generate_image(SELFIE_STYLE + ", " + scene)
-        except Exception as e:
-            print("Camera error:", e)
-            CAMERA_STATUS["last_error"] = repr(e)[:250]
+        result = {}
+        def shoot():
+            try:
+                result["img"] = generate_image(SELFIE_STYLE + ", " + scene)
+            except Exception as e:
+                result["err"] = e
+        worker = threading.Thread(target=shoot, daemon=True)
+        worker.start()
+        started = time.time()
+        PROGRESS = ["still curling my hair 🙈",
+                    "picking out something cute to wear 👗",
+                    "almost ready baby ❤️",
+                    "touching up my lipstick 💄",
+                    "still getting ready, promise I haven't forgotten you 🥰"]
+        tick = 0
+        while worker.is_alive():
+            worker.join(timeout=90)
+            if worker.is_alive():
+                mins = int((time.time() - started) // 60) + 1
+                send_message(chat_id, "%d min in - %s" % (mins, PROGRESS[min(tick, len(PROGRESS) - 1)]))
+                tick += 1
+        if "err" in result:
+            print("Camera error:", result["err"])
+            CAMERA_STATUS["last_error"] = repr(result["err"])[:250]
             CAMERA_STATUS["when"] = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()) + " UTC"
+            send_message(chat_id, "My camera's being moody right now honey, try me again in a minute? 🥺")
+            return
+        img = result.get("img")
+        if img is None:
             send_message(chat_id, "My camera's being moody right now honey, try me again in a minute? 🥺")
             return
         send_photo(chat_id, img, caption)
