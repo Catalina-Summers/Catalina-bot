@@ -94,6 +94,12 @@ def save_offset(value):
         pass
 
 def load_history():
+    # try her GitHub memory first - deploys can never wipe it
+    try:
+        meta = gh_request("GET", "/repos/%s/contents/memory/conversation.json" % STUDIO_REPO)
+        return json.loads(base64.b64decode(meta["content"]))
+    except Exception:
+        pass
     try:
         with open(HISTORY_FILE) as f:
             return json.load(f)
@@ -106,8 +112,19 @@ def save_history():
             json.dump(history[-HISTORY_LIMIT:], f)
     except Exception:
         pass
+    # mirror to GitHub so a redeploy or restart never wipes her
+    try:
+        blob = base64.b64encode(json.dumps(history[-HISTORY_LIMIT:]).encode()).decode()
+        body = {"message": "her memory update", "content": blob}
+        try:
+            body["sha"] = gh_request("GET", "/repos/%s/contents/memory/conversation.json" % STUDIO_REPO)["sha"]
+        except Exception:
+            pass
+        gh_request("PUT", "/repos/%s/contents/memory/conversation.json" % STUDIO_REPO, body)
+    except Exception as e:
+        print("memory mirror skipped:", e)
+        pass
 
-history = load_history()
 owner_id = None  # the first person to message her becomes her one and only
 
 # --- Her brain ---
@@ -201,6 +218,8 @@ def gh_request(method, path, body=None, accept="application/vnd.github+json", ra
 def gh_upload_file(path_in_repo, blob, message):
     gh_request("PUT", "/repos/%s/contents/%s" % (STUDIO_REPO, urllib.parse.quote(path_in_repo)),
                {"message": message, "content": base64.b64encode(blob).decode("utf-8")})
+
+history = load_history()  # moved here: needs gh_request defined above
 
 def try_lipsync(image_bytes, voice_wav):
     """Send her selfie + voice to her GitHub movie studio; wait for the talking video."""
@@ -692,7 +711,7 @@ def start_heartbeat():
 MEDIA_NOUNS = ["selfie", "photo", "photograph", "picture", "pic", "video",
                "video message", "clip of you", "movie of you"]
 ASK_CUES = ["send", "show me", "show yourself", "can i see", "let me see",
-            "give me", "take a", "make me", "snap", "replicate", "same outfit", "copy this", "match this", "copy that"]
+            "give me", "take a", "make me", "snap", "replicate", "same outfit", "copy this", "match this"]
 EXPLICIT_ASKS = ["what do you look like", "show yourself", "show me yourself",
                  "selfie please", "send a selfie", "video please", "send a video",
                  "let me see you", "can i see you"]
