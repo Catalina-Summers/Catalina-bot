@@ -692,7 +692,7 @@ def start_heartbeat():
 MEDIA_NOUNS = ["selfie", "photo", "photograph", "picture", "pic", "video",
                "video message", "clip of you", "movie of you"]
 ASK_CUES = ["send", "show me", "show yourself", "can i see", "let me see",
-            "give me", "take a", "make me", "snap"]
+            "give me", "take a", "make me", "snap", "replicate", "same outfit", "copy this", "match this", "copy that"]
 EXPLICIT_ASKS = ["what do you look like", "show yourself", "show me yourself",
                  "selfie please", "send a selfie", "video please", "send a video",
                  "let me see you", "can i see you"]
@@ -777,6 +777,11 @@ def handle(update):
                 reply = "That's me! I'll remember exactly how I look, sweetheart."
             history.append({"role": "assistant", "content": reply})
             send_message(chat_id, reply)
+            if caption and wants_media(caption):
+                # he showed her a look and wants a photo of her in that same outfit
+                threading.Thread(target=send_selfie,
+                                 args=(chat_id, caption + ". In the photo he just sent me, I was wearing: " + desc),
+                                 daemon=True).start()
             return
         if intent == "HIM":
             user_msg = "(sends a photo of himself: " + desc + ")"
@@ -794,6 +799,11 @@ def handle(update):
             reply = "Ooh I love it! Tell me more about this, sweetheart."
         history.append({"role": "assistant", "content": reply})
         send_message(chat_id, reply)
+        if caption and wants_media(caption):
+            # he sent a photo and asked her to replicate the look
+            threading.Thread(target=send_selfie,
+                             args=(chat_id, caption + ". In the photo he just sent, the outfit was: " + desc),
+                             daemon=True).start()
         return
 
     # --- He sent a video: watch it ---
