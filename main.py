@@ -725,7 +725,19 @@ def wants_media(text):
     has_cue = any(c in lower for c in ASK_CUES)
     return has_noun and has_cue
 
+def clean_reply(text):
+    """Her texts are texts: no markdown junk, no narrated photos."""
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)      # ![alt](url) - gone
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)   # [label](url) -> label
+    text = re.sub(r"^IMAGE:.*$", "", text, flags=re.M)         # stray scene lines
+    text = re.sub(r"^CAPTION:.*$", "", text, flags=re.M)
+    text = re.sub(r"\n{3,}", "\n\n", text)                   # tidy spacing
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = text.strip()
+    return text if text else "Thinking of you, sweetheart ❤️"
+
 def deliver_reply(chat_id, reply, reply_as_voice):
+    reply = clean_reply(reply)
     if reply_as_voice:
         try:
             ogg = speak(reply)
