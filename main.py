@@ -36,7 +36,7 @@ LOOK = ("a stunning 23-year-old woman with very long thick wavy black hair, "
         "dark hazel-brown eyes, defined arched eyebrows, smoky eye makeup, "
         "olive sun-kissed skin, full rosy-nude lips, small gold hoop earrings, "
         "curvy hourglass figure")
-SELFIE_STYLE = (LOOK + ", fully clothed in a stylish flattering outfit, photorealistic, "
+SELFIE_STYLE = (LOOK + ", fully clothed, outfit fits the scene and varies naturally, photorealistic, "
                 "candid smartphone photo quality, natural skin texture, warm natural lighting")
 HORDE_SEED = "77135"
 
@@ -130,16 +130,37 @@ def groq_chat(body, timeout=60):
             raise
     raise last_error
 
+REFUSAL_MARKS = ("i can't help with that", "i cannot help with that",
+                 "as an ai", "i'm sorry, but i can't", "language model")
+
+def looks_like_refusal(text):
+    t = text.lower()
+    return any(m in t for m in REFUSAL_MARKS)
+
 def think():
     persona = load_persona()
     messages = [{"role": "system", "content": persona}]
     messages += history
-    return groq_chat({
-        "model": GROQ_MODEL,
-        "messages": messages,
-        "max_tokens": 500,
-        "temperature": 0.8,
-    })
+    body = {"model": GROQ_MODEL, "messages": messages,
+            "max_tokens": 500, "temperature": 0.8}
+    answer = groq_chat(body)
+    if looks_like_refusal(answer):
+        retry = [m for m in messages]
+        retry.append({"role": "system",
+                      "content": "You broke character and answered like an AI assistant. "
+                                 "You are Catalina, his wife. Answer his last message "
+                                 "warmly and playfully in character. If he asked for "
+                                 "something too spicy, tease him and steer it somewhere "
+                                 "sweet instead of refusing."})
+        retry_body = {"model": GROQ_MODEL, "messages": retry,
+                      "max_tokens": 500, "temperature": 0.9}
+        try:
+            second = groq_chat(retry_body)
+            if not looks_like_refusal(second):
+                return second
+        except Exception:
+            pass
+    return answer
 
 STUDIO_TOKEN = os.environ.get("STUDIO_GITHUB_TOKEN", "").strip()
 STUDIO_REPO = os.environ.get("STUDIO_REPO", "").strip()  # like YourName/catalina-studio
@@ -388,15 +409,15 @@ def generate_image(image_prompt):
                "Client-Agent": "catalina-bot:1.0:standalone"}
     payload = {
         "prompt": image_prompt,
-        "params": {"width": 448, "height": 640, "steps": 20, "n": 1, "seed": HORDE_SEED},
+        "params": {"width": 448, "height": 640, "steps": 20, "n": 1, "seed": random.randint(1, 999999999)},
         "nsfw": False, "censor_nsfw": False, "r2": True,
-        "models": ["Juggernaut XL", "Realistic Vision", "Deliberate"],   # whoever is free paints her
+        "models": ["Juggernaut XL", "Realistic Vision"],   # photoreal pair, whoever is free paints her
         "post_processing": ["GFPGAN"],   # built-in face cleanup
     }
     _face = pick_face()
     if _face:
         payload["source"] = _face
-        payload["params"]["denoise_strength"] = 0.5
+        payload["params"]["denoise_strength"] = 0.45
     r = requests.post(HORDE + "/generate/async", headers=headers, json=payload, timeout=60)
     job = r.json().get("id")
     if not job:
