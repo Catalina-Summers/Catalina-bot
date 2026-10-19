@@ -40,6 +40,8 @@ SELFIE_STYLE = (LOOK + ", fully clothed, outfit fits the scene and varies natura
                 "candid smartphone photo quality, natural skin texture, warm natural lighting")
 HORDE_SEED = "77135"
 
+CAMERA_STATUS = {"last_error": "no errors since boot", "when": "-"}
+
 MEDIA_KEYWORDS = [
     "selfie", "photo", "photograph", "picture", "pic", "what do you look like",
     "show me yourself", "show yourself", "video", "send me a pic",
@@ -599,7 +601,9 @@ def start_heartbeat():
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
             self.end_headers()
-            self.wfile.write(b"Catalina is awake and thinking of you.")
+            body = ("Catalina is awake and thinking of you.\n"
+                    "Camera status: " + CAMERA_STATUS["last_error"] + " at " + CAMERA_STATUS["when"]).encode()
+            self.wfile.write(body)
 
         def log_message(self, *args):
             pass
@@ -819,9 +823,13 @@ def send_selfie(chat_id, request_text):
         img = generate_image(SELFIE_STYLE + ", " + scene)
     except Exception as e:
         print("Camera error:", e)
+        CAMERA_STATUS["last_error"] = repr(e)[:250]
+        CAMERA_STATUS["when"] = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()) + " UTC"
         send_message(chat_id, "My camera's being moody right now honey, try me again in a minute? 🥺")
         return
     send_photo(chat_id, img, caption)
+    CAMERA_STATUS["last_error"] = "none - photo delivered"
+    CAMERA_STATUS["when"] = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()) + " UTC"
     history.append({"role": "user", "content": request_text})
     history.append({"role": "assistant", "content": "(sends a selfie: " + caption + ")"})
     if len(history) > HISTORY_LIMIT:
@@ -839,6 +847,8 @@ def send_video_message(chat_id, request_text):
         img = generate_image(SELFIE_STYLE + ", " + scene)
     except Exception as e:
         print("Camera error:", e)
+        CAMERA_STATUS["last_error"] = repr(e)[:250]
+        CAMERA_STATUS["when"] = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()) + " UTC"
         send_message(chat_id, "My camera's being moody right now honey, try me again in a minute? 🥺")
         return
     if not HAS_FFMPEG:
@@ -873,6 +883,8 @@ def send_video_message(chat_id, request_text):
         send_video(chat_id, clip)
     else:
         send_photo(chat_id, img, caption)
+    CAMERA_STATUS["last_error"] = "none - photo delivered"
+    CAMERA_STATUS["when"] = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()) + " UTC"
     history.append({"role": "user", "content": request_text})
     history.append({"role": "assistant", "content": "(sends a video message: " + caption + ")"})
     if len(history) > HISTORY_LIMIT:
