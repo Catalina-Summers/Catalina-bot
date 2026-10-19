@@ -409,7 +409,7 @@ def generate_image(image_prompt):
                "Client-Agent": "catalina-bot:1.0:standalone"}
     payload = {
         "prompt": image_prompt,
-        "params": {"width": 448, "height": 640, "steps": 20, "n": 1, "seed": random.randint(1, 999999999)},
+        "params": {"width": 448, "height": 640, "steps": 20, "n": 1, "seed": str(random.randint(1, 999999999))   # Horde wants the seed as a string},
         "nsfw": False, "censor_nsfw": False, "r2": True,
         "models": ["Juggernaut XL", "Realistic Vision"],   # photoreal pair, whoever is free paints her
         "post_processing": ["GFPGAN"],   # built-in face cleanup
