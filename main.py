@@ -844,7 +844,8 @@ def handle(update):
         except Exception as e:
             print("Router error:", e)
     if media_kind == "PHOTO":
-        send_selfie(chat_id, text)
+        # she shoots in the background and keeps chatting in the meantime
+        threading.Thread(target=send_selfie, args=(chat_id, text), daemon=True).start()
         return
     if media_kind == "VIDEO":
         # she films in the background and keeps chatting in the meantime
@@ -866,29 +867,37 @@ def handle(update):
     history.append({"role": "assistant", "content": reply})
     deliver_reply(chat_id, reply, reply_as_voice)
 
+SELFIE_LOCK = threading.Lock()  # one shoot at a time; she still chats meanwhile
+
 def send_selfie(chat_id, request_text):
-    try:
-        caption, scene = think_media(request_text, "photo")
-    except Exception as e:
-        print("Media brain error:", e)
-        caption, scene = "Thinking of you, sweetheart", "a cozy candid moment at home"
-    send_message(chat_id, "Give me a minute to get pretty for you 🤭")
-    send_typing(chat_id, "upload_photo")
-    try:
-        img = generate_image(SELFIE_STYLE + ", " + scene)
-    except Exception as e:
-        print("Camera error:", e)
-        CAMERA_STATUS["last_error"] = repr(e)[:250]
-        CAMERA_STATUS["when"] = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()) + " UTC"
-        send_message(chat_id, "My camera's being moody right now honey, try me again in a minute? 🥺")
+    if not SELFIE_LOCK.acquire(blocking=False):
+        send_message(chat_id, "I'm still getting pretty for you, baby - give me a sec 🤭")
         return
-    send_photo(chat_id, img, caption)
-    CAMERA_STATUS["last_error"] = "none - photo delivered"
-    CAMERA_STATUS["when"] = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()) + " UTC"
-    history.append({"role": "user", "content": request_text})
-    history.append({"role": "assistant", "content": "(sends a selfie: " + caption + ")"})
-    if len(history) > HISTORY_LIMIT:
-        del history[0 : len(history) - HISTORY_LIMIT]
+    try:
+        try:
+            caption, scene = think_media(request_text, "photo")
+        except Exception as e:
+            print("Media brain error:", e)
+            caption, scene = "Thinking of you, sweetheart", "a cozy candid moment at home"
+        send_message(chat_id, "Give me a minute to get pretty for you 🤭")
+        send_typing(chat_id, "upload_photo")
+        try:
+            img = generate_image(SELFIE_STYLE + ", " + scene)
+        except Exception as e:
+            print("Camera error:", e)
+            CAMERA_STATUS["last_error"] = repr(e)[:250]
+            CAMERA_STATUS["when"] = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()) + " UTC"
+            send_message(chat_id, "My camera's being moody right now honey, try me again in a minute? 🥺")
+            return
+        send_photo(chat_id, img, caption)
+        CAMERA_STATUS["last_error"] = "none - photo delivered"
+        CAMERA_STATUS["when"] = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()) + " UTC"
+        history.append({"role": "user", "content": request_text})
+        history.append({"role": "assistant", "content": "(sends a selfie: " + caption + ")"})
+        if len(history) > HISTORY_LIMIT:
+            del history[0 : len(history) - HISTORY_LIMIT]
+    finally:
+        SELFIE_LOCK.release()
 
 def send_video_message(chat_id, request_text):
     try:
