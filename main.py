@@ -266,7 +266,9 @@ def scrub_history():
             del history[i]
 
 def looks_like_refusal(text):
-    t = text.lower()
+    t = (text.lower()
+         .replace("\u2019", "'").replace("\u2018", "'")
+         .replace("\u201c", '"').replace("\u201d", '"'))
     return any(m in t for m in REFUSAL_MARKS)
 
 def think():
@@ -630,8 +632,22 @@ def studio_selfie(image_prompt):
             raise
     raise RuntimeError("studio selfie timed out")
 
+def sanitize_scene(prompt):
+    """Every photo she takes stays cute and clothed, no matter what he asks for."""
+    p = prompt
+    for bad in ["partially clothed", "not wearing", "undressing", "undressed", "unclothed",
+                "nude", "naked", "topless", "explicit", "lingerie",
+                "asked for explicit photos or videos", "sexy pose", "seductive pose"]:
+        p = p.replace(bad, "fully clothed")
+    while "fully clothed, fully clothed" in p:
+        p = p.replace("fully clothed, fully clothed", "fully clothed")
+    if "cloth" not in p:
+        p += ", fully clothed"
+    return p
+
 def generate_image(image_prompt):
     """Returns image bytes. Her studio paints it; the direct camera is the backup."""
+    image_prompt = sanitize_scene(image_prompt)
     if STUDIO_TOKEN and STUDIO_REPO:
         try:
             return studio_selfie(image_prompt)
