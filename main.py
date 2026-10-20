@@ -80,10 +80,20 @@ HARD RULES, never break these:
 # ------------------------------------------------------------ http helpers
 def _req(url, data=None, headers=None, method=None, timeout=60):
     req = urllib.request.Request(url, data=data, method=method)
+    req.add_header("User-Agent", "ani-bot/1.0")
     for k, v in (headers or {}).items():
         req.add_header(k, v)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read()
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", "replace")
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"HTTP {e.code} from {url.split('?')[0]} :: {body[:400]}")
 
 def _json(url, obj, headers=None, method="POST", timeout=90):
     h = {"Content-Type": "application/json"}
@@ -224,20 +234,26 @@ def looks_like_refusal(t):
     return any(m in low for m in REFUSAL_MARKS)
 
 def chat(messages, model=None, temp=0.85, max_tokens=None):
-    body = {"model": model or CHAT_MODEL, "messages": messages,
-            "temperature": temp, "max_tokens": max_tokens or MAX_TOKENS,
-            "reasoning_effort": "low"}
+    base = {"model": model or CHAT_MODEL, "messages": messages,
+            "temperature": temp, "max_tokens": max_tokens or MAX_TOKENS}
     h = {"Authorization": f"Bearer {CHAT_KEY}"}
-    try:
-        r = json.loads(_json(f"{CHAT_API}/chat/completions", body, h))
-    except urllib.error.HTTPError as e:
-        if e.code == 400:
-            body.pop("reasoning_effort", None)
-            r = json.loads(_json(f"{CHAT_API}/chat/completions", body, h))
-        else:
-            raise
-    m = r["choices"][0]["message"]
-    return (m.get("content") or "").strip()
+    url = f"{CHAT_API}/chat/completions"
+
+    last = None
+    for extra in ({"reasoning_effort": "low"}, {}):
+        body = dict(base)
+        body.update(extra)
+        try:
+            r = json.loads(_json(url, body, h))
+            m = r["choices"][0]["message"]
+            out = (m.get("content") or "").strip()
+            if out:
+                return out
+            last = RuntimeError("empty reply from model")
+        except Exception as e:
+            last = e
+            print("chat failed", extra, "->", e)
+    raise last
 
 def think(user_text, image_b64=None):
     msgs = [{"role": "system", "content": SYSTEM}] + history
@@ -577,17 +593,50 @@ def poll():
             print("poll", e)
             time.sleep(3)
 
+# ------------------------------------------------------------------ health
+def debug_report():
+    lines = ["--- ani debug ---",
+             f"chat_api:     {CHAT_API}",
+             f"chat_model:   {CHAT_MODEL}",
+             f"chat_key_len: {len(CHAT_KEY or '')}",
+             f"groq_key_len: {len(GROQ_KEY or '')}",
+             f"gh_token_set: {bool(GH_TOKEN)}",
+             f"gh_repo:      {GH_REPO or '(MISSING)'}",
+             f"horde_key:    {'custom' if HORDE_KEY != '0000000000' else 'anonymous'}",
+             f"persona_len:  {len(PERSONA)}",
+             f"history_len:  {len(history)}",
+             f"ffmpeg:       {FFMPEG}",
+             "--- live probe ---"]
+    try:
+        out = chat([{"role": "user", "content": "reply with the single word OK"}],
+                   max_tokens=20)
+        lines.append(f"PROBE OK: {out[:200]}")
+    except Exception as e:
+        lines.append(f"PROBE FAIL: {e}")
+    return "\n".join(lines)
+
 def health_server():
     port = os.environ.get("PORT", "10000")
     from http.server import BaseHTTPRequestHandler, HTTPServer
+
     class H(BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain")
+        def _out(self, text, code=200):
+            b = text.encode("utf-8", "replace")
+            self.send_response(code)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(b)))
             self.end_headers()
-            self.wfile.write(b"ani is awake")
+            self.wfile.write(b)
+
+        def do_GET(self):
+            if urllib.parse.urlparse(self.path).path == "/debug":
+                self._out(debug_report())
+            else:
+                self._out("ani is awake")
+
         def log_message(self, *a):
             pass
+
     try:
         HTTPServer(("0.0.0.0", int(port)), H).serve_forever()
     except Exception as e:
