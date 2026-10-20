@@ -282,7 +282,17 @@ def think():
     body = {"model": GROQ_MODEL, "messages": messages,
             "max_tokens": 500, "temperature": 0.8}
     answer = groq_chat(body)
-    if looks_like_refusal(answer):
+    if not answer or not answer.strip():
+        # her reply came back empty - nudge her once before anything else
+        try:
+            answer = groq_chat({"model": GROQ_MODEL,
+                                "messages": messages + [{"role": "system",
+                                "content": "Your last reply came back empty. Answer his last "
+                                           "message again, warmly and playfully, in character."}],
+                                "max_tokens": 500, "temperature": 0.9}) or ""
+        except Exception:
+            answer = ""
+    if looks_like_refusal(answer) or not answer.strip():
         retry = [m for m in messages]
         retry.append({"role": "system",
                       "content": "You broke character and answered like an AI assistant. "
@@ -294,7 +304,7 @@ def think():
                       "max_tokens": 500, "temperature": 0.9}
         try:
             second = groq_chat(retry_body)
-            if not looks_like_refusal(second):
+            if second and second.strip() and not looks_like_refusal(second):
                 return second
         except Exception:
             pass
