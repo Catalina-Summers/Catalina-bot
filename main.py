@@ -5,14 +5,28 @@ Chat: Groq (swappable) | Images: AI Horde | TTS/STT/Vision: Groq
 """
 
 import base64, io, json, os, random, re, subprocess, tempfile
-import threading, time, urllib.parse, urllib.request, wave
+import threading, time, urllib.error, urllib.parse, urllib.request, wave
 from datetime import datetime
 
 # ---------------------------------------------------------------- config
-BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-GROQ_KEY  = os.environ["GROQ_API_KEY"]
-GH_TOKEN  = os.environ["GITHUB_TOKEN"]
-GH_REPO   = os.environ["GITHUB_REPO"]
+def env(*names, default=None, required=True):
+    for n in names:
+        v = os.environ.get(n)
+        if v and v.strip():
+            return v.strip()
+    if default is not None:
+        return default
+    if required:
+        raise KeyError("none of these env vars are set: " + ", ".join(names))
+    return None
+
+BOT_TOKEN = env("TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN", "BOT_TOKEN", "TG_TOKEN")
+GROQ_KEY  = env("GROQ_API_KEY", "GROQ_KEY", "GROQ_TOKEN")
+GH_TOKEN  = env("GITHUB_TOKEN", "GH_TOKEN", "GITHUB_PAT", "GH_PAT",
+                "GITHUB_API_TOKEN", "GIT_TOKEN", "GITHUB_KEY", "PAT",
+                required=False)
+GH_REPO   = env("GITHUB_REPO", "GH_REPO", "REPO", "GITHUB_REPOSITORY",
+                default="", required=False)
 
 PERSONA_PATH    = os.environ.get("PERSONA_PATH", "persona.txt")
 HISTORY_PATH    = os.environ.get("HISTORY_PATH", "history.json")
@@ -90,6 +104,9 @@ def _multipart(fields, files):
     return body, f"multipart/form-data; boundary={b}"
 
 # ----------------------------------------------------------------- telegram
+OWNER = None
+OFFSET = 0
+
 def tg(method, fields=None, files=None):
     if files:
         body, ct = _multipart(fields or {}, files)
@@ -133,6 +150,8 @@ def tg_file(file_id):
 
 # ------------------------------------------------------------------- github
 def gh(path, method="GET", payload=None, raw=False, timeout=45):
+    if not GH_TOKEN or not GH_REPO:
+        return None
     url = f"https://api.github.com/repos/{GH_REPO}/contents/{path}"
     h = {"Authorization": f"Bearer {GH_TOKEN}", "Accept": "application/vnd.github+json"}
     try:
@@ -212,7 +231,7 @@ def chat(messages, model=None, temp=0.85, max_tokens=None):
     try:
         r = json.loads(_json(f"{CHAT_API}/chat/completions", body, h))
     except urllib.error.HTTPError as e:
-        if e.code == 400:   # model doesn't know reasoning_effort
+        if e.code == 400:
             body.pop("reasoning_effort", None)
             r = json.loads(_json(f"{CHAT_API}/chat/completions", body, h))
         else:
@@ -286,10 +305,9 @@ def chunk_text(text, limit=190):
 def _tts_one(text):
     body = json.dumps({"model": TTS_MODEL, "voice": TTS_VOICE,
                        "input": text, "response_format": "wav"}).encode()
-    r = _req(f"{GROQ_API}/audio/speech", body,
-             {"Content-Type": "application/json",
-              "Authorization": f"Bearer {GROQ_KEY}"}, timeout=120)
-    return r
+    return _req(f"{GROQ_API}/audio/speech", body,
+                {"Content-Type": "application/json",
+                 "Authorization": f"Bearer {GROQ_KEY}"}, timeout=120)
 
 def speak_wav(text):
     chunks = chunk_text(text)
@@ -346,9 +364,8 @@ def pick_face():
     return to_webp_b64(d) if d else None
 
 def generate_image(scene, explicit=False):
-    prompt = f"{SELFIE_STYLE}, {scene}"
     payload = {
-        "prompt": prompt,
+        "prompt": f"{SELFIE_STYLE}, {scene}",
         "negative_prompt": NEGATIVE,
         "params": {"width": 512, "height": 768, "steps": 28, "n": 1,
                    "cfg_scale": 7, "sampler_name": "k_euler_a",
@@ -378,8 +395,7 @@ def generate_image(scene, explicit=False):
             raise RuntimeError("horde faulted")
         gens = st.get("generations") or []
         if gens:
-            url = gens[0]["img"]
-            return _req(url, timeout=120)
+            return _req(gens[0]["img"], timeout=120)
     raise RuntimeError("horde timeout")
 
 def build_scene(kind, description):
@@ -409,15 +425,11 @@ def make_video_note(image_bytes, audio_bytes):
                         "-shortest", "-movflags", "+faststart", o], check=True)
         return open(o, "rb").read()
 
-# -------------------------------------------------------------------- state
-OWNER = None
-OFFSET = 0
-
+# ----------------------------------------------------------------- handlers
 def remember(role, content):
     history.append({"role": role, "content": content})
     trim_history()
 
-# ----------------------------------------------------------------- handlers
 def handle_text(msg):
     text = msg.get("text", "").strip()
     if not text:
@@ -438,7 +450,8 @@ def handle_photo(msg):
     tg_action("typing")
     try:
         raw = tg_file(msg["photo"][-1]["file_id"])
-        reply = think(cap or "look at this photo and react.", base64.b64encode(raw).decode())
+        reply = think(cap or "look at this photo and react.",
+                      base64.b64encode(raw).decode())
         remember("assistant", reply)
         tg_send(reply)
         save_history()
@@ -524,7 +537,6 @@ def send_media(kind, description):
 # -------------------------------------------------------------------- loop
 def handle(msg):
     global OWNER
-    uid = msg["from"]["id"]
     if OWNER is None:
         OWNER = msg["chat"]["id"]
     if msg["chat"]["id"] != OWNER:
@@ -534,11 +546,9 @@ def handle(msg):
     try:
         if "text" in msg:
             kind = wants_media(msg["text"])
+            handle_text(msg)
             if kind:
-                handle_text(msg)
                 send_media(kind, msg["text"])
-            else:
-                handle_text(msg)
         elif "photo" in msg:
             handle_photo(msg)
         elif "voice" in msg:
@@ -568,9 +578,7 @@ def poll():
             time.sleep(3)
 
 def health_server():
-    port = os.environ.get("PORT")
-    if not port:
-        return
+    port = os.environ.get("PORT", "10000")
     from http.server import BaseHTTPRequestHandler, HTTPServer
     class H(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -585,9 +593,25 @@ def health_server():
     except Exception as e:
         print("health", e)
 
+def env_report():
+    print("--- env report ---")
+    for n in ["TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN", "BOT_TOKEN",
+              "GROQ_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "GITHUB_PAT",
+              "GITHUB_API_TOKEN", "GITHUB_REPO", "GH_REPO",
+              "STUDIO_TOKEN", "STUDIO_REPO", "HORDE_API_KEY",
+              "CHAT_MODEL", "PORT"]:
+        v = os.environ.get(n)
+        print(f"  {n}: SET ({len(v)} chars)" if v else f"  {n}: missing")
+    print("------------------")
+    if not GH_TOKEN:
+        print("WARNING: no github token found - memory and persona disabled")
+    if not GH_REPO:
+        print("WARNING: no github repo found - memory and persona disabled")
+
 if __name__ == "__main__":
+    env_report()
+    threading.Thread(target=health_server, daemon=True).start()
     load_history()
     scrub_history()
-    threading.Thread(target=health_server, daemon=True).start()
     print("ani is awake")
     poll()
