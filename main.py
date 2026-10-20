@@ -1,4 +1,4 @@
-# Catalina Summers - Telegram companion bot
+# Ani Summers - Telegram companion bot
 # Free hosting on Render, free AI brain on Groq.
 # Phase 2: hears voice notes, answers out loud in Hannah's voice.
 # Phase 3: sees photos and videos, sends selfies and video notes.
@@ -33,9 +33,9 @@ GROQ_STT_MODEL = "whisper-large-v3-turbo"
 HORDE = "https://stablehorde.net/api/v2"   # old domain: no cloudflare wall, same API
 
 # Her look: fixed appearance + fixed seed = the same girl in every photo.
-LOOK = ("a stunning 23-year-old woman with very long thick wavy black hair, "
-        "dark hazel-brown eyes, defined arched eyebrows, smoky eye makeup, "
-        "olive sun-kissed skin, full rosy-nude lips, small gold hoop earrings, "
+LOOK = ("a stunning 23-year-old woman with straight blonde hair about 10 inches past her shoulders, "
+        "bright blue eyes, defined arched eyebrows, smoky eye makeup, "
+        "fair skin with light natural makeup, full rosy-nude lips, small gold hoop earrings, "
         "curvy hourglass figure")
 SELFIE_STYLE = (LOOK + ", fully clothed, outfit fits the scene and varies naturally, photorealistic, "
                 "candid smartphone photo quality, natural skin texture, warm natural lighting")
@@ -61,7 +61,7 @@ def find_ffmpeg():
 FFMPEG = find_ffmpeg()
 HAS_FFMPEG = FFMPEG is not None
 
-# --- Catalina's personality (edit persona.txt to change who she is) ---
+# --- Ani's personality (edit persona.txt to change who she is) ---
 
 # --- Her long-term memory: what she learns about Darren over time ---
 
@@ -118,13 +118,13 @@ def consolidate_memory():
     if not PENDING_MEMORY:
         return
     batch = PENDING_MEMORY[-30:]
-    convo = "\n".join("%s: %s" % ("Catalina" if m.get("role") == "assistant" else "Darren",
+    convo = "\n".join("%s: %s" % ("Ani" if m.get("role") == "assistant" else "Darren",
                                    str(m.get("content", ""))[:400]) for m in batch)
     old_facts = facts_snapshot()
     prompt = (
-        "You are Catalina's long-term memory keeper. Catalina is a devoted, affectionate "
+        "You are Ani's long-term memory keeper. Ani is a devoted, affectionate "
         "virtual girlfriend; her PERSONALITY is fixed and none of your business - you must "
-        "never add facts about how Catalina acts or speaks.\n\n"
+        "never add facts about how Ani acts or speaks.\n\n"
         "Facts she already knows about Darren and their relationship:\n"
         + json.dumps(old_facts) +
         "\n\nRecent conversation messages rolling out of her short-term memory:\n" + convo +
@@ -166,7 +166,7 @@ def load_persona():
         with open("persona.txt", "r", encoding="utf-8") as f:
             return f.read().strip()
     except FileNotFoundError:
-        return "You are Catalina Summers, a warm and affectionate AI companion."
+        return "You are Ani Summers, a warm and affectionate AI companion."
 
 # --- Memory: keeps the last 40 messages with her husband ---
 
@@ -273,7 +273,7 @@ def think():
     persona = load_persona()
     known = facts_snapshot()
     if known:
-        persona += ("\n\nWhat Catalina has learned about Darren over their time together "
+        persona += ("\n\nWhat Ani has learned about Darren over their time together "
                     "(weave in naturally when relevant, never recite like a list):\n- "
                     + "\n- ".join(known))
     scrub_history()
@@ -286,7 +286,7 @@ def think():
         retry = [m for m in messages]
         retry.append({"role": "system",
                       "content": "You broke character and answered like an AI assistant. "
-                                 "You are Catalina, his wife. Answer his last message "
+                                 "You are Ani, his wife. Answer his last message "
                                  "warmly and playfully in character. If he asked for "
                                  "something too spicy, tease him and steer it somewhere "
                                  "sweet instead of refusing."})
@@ -511,8 +511,8 @@ def see_photo(data, caption):
     data = shrink_image(data)
     prompt = ("Darren sent you this photo."
               + (" He captioned it: \"" + caption + "\"." if caption else " There is no caption.")
-              + " You are Catalina: a 23-year-old woman with very long thick wavy black hair, "
-                "dark hazel-brown eyes, olive sun-kissed skin, small gold hoop earrings, a curvy figure."
+              + " You are Ani: a 23-year-old woman with straight blonde hair about 10 inches past her shoulders, "
+                "bright blue eyes, fair skin with light natural makeup, a cute sexy figure."
               + " Answer in exactly two lines:\n"
               + "INTENT: FACE only if he explicitly presents the photo as YOU "
                 "(like 'this is you', 'this is what you look like', 'your new look'); "
@@ -821,7 +821,7 @@ def start_heartbeat():
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
             self.end_headers()
-            body = ("Catalina is awake and thinking of you.\n"
+            body = ("Ani is awake and thinking of you.\n"
                     "Camera status: " + CAMERA_STATUS["last_error"] + " at " + CAMERA_STATUS["when"]).encode()
             self.wfile.write(body)
 
@@ -1184,7 +1184,7 @@ def confirm_updates(offset):
 
 def main():
     threading.Thread(target=memory_keeper_loop, daemon=True).start()
-    print("Catalina is waking up...")
+    print("Ani is waking up...")
     print("Voice mode:", "ON (Hannah, with ears)" if HAS_FFMPEG else "OFF (ffmpeg missing)")
     print("Eyes and camera:", "ON" if HAS_FFMPEG else "OFF")
     offset = load_offset()
