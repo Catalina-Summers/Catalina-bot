@@ -575,13 +575,13 @@ def download_file(file_id):
     with urllib.request.urlopen(req, timeout=120) as resp:
         return resp.read()
 
-def transcribe(audio_bytes):
+def transcribe(audio_bytes, filename="voice.ogg", ctype="audio/ogg"):
     boundary = "catalina"
     pre = (
         "--%s\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n%s\r\n"
-        "--%s\r\nContent-Disposition: form-data; name=\"file\"; filename=\"voice.ogg\"\r\n"
-        "Content-Type: audio/ogg\r\n\r\n"
-    ) % (boundary, GROQ_STT_MODEL, boundary)
+        "--%s\r\nContent-Disposition: form-data; name=\"file\"; filename=\"%s\"\r\n"
+        "Content-Type: %s\r\n\r\n"
+    ) % (boundary, GROQ_STT_MODEL, boundary, filename, ctype)
     post = "\r\n--%s--\r\n" % boundary
     body = pre.encode("utf-8") + audio_bytes + post.encode("utf-8")
     req = urllib.request.Request(GROQ_STT, data=body, method="POST")
@@ -863,7 +863,23 @@ def handle(update):
             print("Eye error:", e)
             send_message(chat_id, "My eyes are acting up sweetheart, show me that again?")
             return
+        heard = ""
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                vp = os.path.join(td, "v.bin"); ap = os.path.join(td, "a.wav")
+                with open(vp, "wb") as f:
+                    f.write(data)
+                subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", vp,
+                                "-vn", "-ar", "16000", "-ac", "1", ap],
+                               capture_output=True, timeout=120)
+                if os.path.exists(ap) and os.path.getsize(ap) > 2000:
+                    with open(ap, "rb") as f:
+                        heard = transcribe(f.read(), "voice.wav", "audio/wav").strip()
+        except Exception as e:
+            print("Video ears error:", e)
         user_msg = "(sends a video: " + desc + ")"
+        if heard:
+            user_msg += " In the video you can hear: \"" + heard[:400] + "\""
         if caption:
             user_msg += " with the message: \"" + caption + "\""
         history.append({"role": "user", "content": user_msg})
