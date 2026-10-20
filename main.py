@@ -34,9 +34,9 @@ HORDE = "https://stablehorde.net/api/v2"   # old domain: no cloudflare wall, sam
 
 # Her look: fixed appearance + fixed seed = the same girl in every photo.
 LOOK = ("a stunning 23-year-old woman with straight blonde hair about 10 inches past her shoulders, "
-        "bright blue eyes, defined arched eyebrows, smoky eye makeup, "
-        "fair skin with light natural makeup, full rosy-nude lips, small gold hoop earrings, "
-        "curvy hourglass figure")
+        "bright blue eyes, natural blonde eyebrows, "
+        "fair skin with light natural makeup, full rosy-nude lips, "
+        "a cute sexy figure")
 SELFIE_STYLE = (LOOK + ", fully clothed, outfit fits the scene and varies naturally, photorealistic, "
                 "candid smartphone photo quality, natural skin texture, warm natural lighting")
 HORDE_SEED = "77135"
