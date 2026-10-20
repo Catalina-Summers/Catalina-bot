@@ -242,7 +242,7 @@ def try_lipsync(image_bytes, voice_wav, scene):
     except Exception as e:
         print("Studio submit error:", e)
         return None
-    deadline = time.time() + 22 * 60
+    deadline = time.time() + 28 * 60
     while time.time() < deadline:
         time.sleep(20)
         try:
