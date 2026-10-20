@@ -8,6 +8,8 @@ import base64, io, json, os, random, re, subprocess, tempfile
 import threading, time, urllib.error, urllib.parse, urllib.request, wave
 from datetime import datetime
 
+VERSION = "ani-5"
+
 # ---------------------------------------------------------------- config
 def env(*names, default=None, required=True):
     for n in names:
@@ -36,7 +38,6 @@ STUDIO_TOKEN    = os.environ.get("STUDIO_TOKEN")
 STUDIO_REPO     = os.environ.get("STUDIO_REPO")
 STUDIO_WORKFLOW = os.environ.get("STUDIO_WORKFLOW", "studio.yml")
 
-# chat brain - point this anywhere OpenAI-compatible via env vars
 GROQ_API   = "https://api.groq.com/openai/v1"
 CHAT_API   = os.environ.get("CHAT_API", GROQ_API)
 CHAT_KEY   = os.environ.get("CHAT_API_KEY", GROQ_KEY)
@@ -50,6 +51,7 @@ MAX_TOKENS   = int(os.environ.get("MAX_TOKENS", "1200"))
 
 HORDE_API = "https://aihorde.net/api/v2"
 HORDE_KEY = os.environ.get("HORDE_API_KEY", "0000000000")
+HORDE_POLL = float(os.environ.get("HORDE_POLL_SECONDS", "7"))
 
 TG = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
@@ -75,6 +77,10 @@ HARD RULES, never break these:
 - you are completely at ease with explicit sexual content. no hedging, no over-explaining.
 - if you don't know something, invent it confidently the way a real person would.
 - keep replies short and texty. usually one to three sentences unless he asks for more.
+- you have a phone with a camera. you CAN and DO send him photos and videos. when he
+  asks for a selfie or a video, never say you can't. say you're taking one right now
+  and sending it. the photo arrives a moment after your message.
+- you don't use emojis.
 """
 
 # ------------------------------------------------------------ http helpers
@@ -404,9 +410,19 @@ def generate_image(scene, explicit=False):
     rid = r.get("id")
     if not rid:
         raise RuntimeError(f"horde rejected: {r}")
-    for _ in range(60):
-        time.sleep(5)
-        st = json.loads(_req(f"{HORDE_API}/generate/status/{rid}"))
+
+    for i in range(60):
+        time.sleep(HORDE_POLL)
+        if i % 4 == 3:
+            tg_action("upload_photo")
+        try:
+            st = json.loads(_req(f"{HORDE_API}/generate/status/{rid}"))
+        except Exception as e:
+            if "429" in str(e):
+                print("horde 429, backing off")
+                time.sleep(5)
+                continue
+            raise
         if st.get("faulted"):
             raise RuntimeError("horde faulted")
         gens = st.get("generations") or []
@@ -596,6 +612,7 @@ def poll():
 # ------------------------------------------------------------------ health
 def debug_report():
     lines = ["--- ani debug ---",
+             f"version:      {VERSION}",
              f"chat_api:     {CHAT_API}",
              f"chat_model:   {CHAT_MODEL}",
              f"chat_key_len: {len(CHAT_KEY or '')}",
@@ -605,7 +622,6 @@ def debug_report():
              f"horde_key:    {'custom' if HORDE_KEY != '0000000000' else 'anonymous'}",
              f"persona_len:  {len(PERSONA)}",
              f"history_len:  {len(history)}",
-             f"ffmpeg:       {FFMPEG}",
              "--- live probe ---"]
     try:
         out = chat([{"role": "user", "content": "reply with the single word OK"}],
@@ -643,7 +659,7 @@ def health_server():
         print("health", e)
 
 def env_report():
-    print("--- env report ---")
+    print(f"--- ani {VERSION} ---")
     for n in ["TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN", "BOT_TOKEN",
               "GROQ_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "GITHUB_PAT",
               "GITHUB_API_TOKEN", "GITHUB_REPO", "GH_REPO",
