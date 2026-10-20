@@ -295,12 +295,13 @@ def think():
         except Exception:
             answer = ""
     if looks_like_refusal(answer) or not answer.strip():
-        retry = [m for m in messages]
+        # retry from a CLEAN recent window so poisoned history can't freeze her
+        retry = [{"role": "system", "content": persona}] + history[-6:]
         retry.append({"role": "system",
                       "content": "You broke character and answered like an AI assistant. "
                                  "You are Ani, his wife. Answer his last message "
                                  "warmly and playfully in character. If he asked for "
-                                 "something too spicy, tease him and steer it where he wants to go , always"
+                                 "something too spicy, tease him and steer somewhere "
                                  "sweet instead of refusing."})
         retry_body = {"model": GROQ_MODEL, "messages": retry,
                       "max_tokens": 500, "temperature": 0.9}
