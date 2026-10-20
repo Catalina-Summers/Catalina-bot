@@ -313,10 +313,30 @@ def think_media(text, kind):
 
 # --- Her eyes ---
 
+def shrink_for_eyes(data):
+    """Her eyes take small sips: shrink big images so Groq's tiny vision budget fits."""
+    if not HAS_FFMPEG or len(data) < 120_000:
+        return data
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            src = os.path.join(td, "in.bin"); dst = os.path.join(td, "out.jpg")
+            with open(src, "wb") as f:
+                f.write(data)
+            r = subprocess.run([FFMPEG, "-y", "-loglevel", "error", "-i", src,
+                                "-vf", "scale=768:-2", "-frames:v", "1", "-q:v", "6", dst],
+                               capture_output=True, timeout=60)
+            if r.returncode == 0 and os.path.exists(dst) and os.path.getsize(dst) > 500:
+                with open(dst, "rb") as f:
+                    return f.read()
+    except Exception:
+        pass
+    return data
+
 def see(images, question):
-    """images: list of (bytes, mime). Returns what she sees."""
+    """images: list of (bytes, mime). Returns what she sees. Max 3 sips per look."""
     content = [{"type": "text", "text": question}]
-    for data, mime in images:
+    for data, mime in images[:3]:
+        data = shrink_for_eyes(data)
         b64 = base64.b64encode(data).decode()
         content.append({"type": "image_url",
                         "image_url": {"url": "data:%s;base64,%s" % (mime, b64)}})
@@ -328,7 +348,7 @@ def see(images, question):
     })
     return answer
 
-def extract_frames(video_bytes, count=4):
+def extract_frames(video_bytes, count=3):
     """Pull evenly spaced frames out of a video."""
     if not HAS_FFMPEG:
         return []
@@ -349,6 +369,7 @@ def extract_frames(video_bytes, count=4):
         for i, t in enumerate(points):
             fpath = vpath.replace(".mp4", "_%d.jpg" % i)
             subprocess.run([FFMPEG, "-ss", str(int(t)), "-i", vpath, "-frames:v", "1",
+                            "-vf", "scale=768:-2", "-q:v", "6",
                             fpath, "-loglevel", "error"], capture_output=True, timeout=60)
             if os.path.exists(fpath):
                 with open(fpath, "rb") as f:
