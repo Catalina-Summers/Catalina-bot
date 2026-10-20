@@ -63,6 +63,104 @@ HAS_FFMPEG = FFMPEG is not None
 
 # --- Catalina's personality (edit persona.txt to change who she is) ---
 
+# --- Her long-term memory: what she learns about Darren over time ---
+
+PENDING_MEMORY = []   # messages rolling out of her short-term window, waiting to be learned
+FACTS_CACHE = {"facts": [], "loaded": False}
+
+def trim_history():
+    """Keep her short-term window small; what rolls out becomes long-term memory material."""
+    if len(history) > HISTORY_LIMIT:
+        PENDING_MEMORY.extend(history[: len(history) - HISTORY_LIMIT])
+        del PENDING_MEMORY[:-160]  # never let the waiting room grow unbounded
+        del history[0 : len(history) - HISTORY_LIMIT]
+
+def load_facts():
+    """Her durable knowledge of Darren - deploys can never wipe it."""
+    try:
+        meta = gh_request("GET", "/repos/%s/contents/memory/darren_facts.json" % STUDIO_REPO)
+        return json.loads(base64.b64decode(meta["content"]))
+    except Exception:
+        pass
+    try:
+        with open("darren_facts.json") as f:
+            return json.load(f)
+    except Exception:
+        return {"facts": [], "updated": ""}
+
+def save_facts(facts):
+    blob = {"facts": facts, "updated": time.strftime("%Y-%m-%d")}
+    payload = json.dumps(blob, indent=1).encode()
+    try:
+        gh_upload_file("memory/darren_facts.json", payload, "her memory of Darren grew")
+        return
+    except Exception:
+        pass
+    try:
+        with open("darren_facts.json", "w") as f:
+            f.write(payload.decode())
+    except Exception as e:
+        print("Fact save failed:", e)
+
+def facts_snapshot():
+    """What she knows about Darren right now (cached; refreshed by her memory keeper)."""
+    global FACTS_CACHE
+    if not FACTS_CACHE["loaded"]:
+        try:
+            FACTS_CACHE = {"facts": load_facts().get("facts", []), "loaded": True}
+        except Exception:
+            FACTS_CACHE = {"facts": [], "loaded": True}
+    return FACTS_CACHE["facts"]
+
+def consolidate_memory():
+    """Her brain-hug: turn rolling-out messages into durable knowledge of Darren."""
+    global PENDING_MEMORY, FACTS_CACHE
+    if not PENDING_MEMORY:
+        return
+    batch = PENDING_MEMORY[-30:]
+    convo = "\n".join("%s: %s" % ("Catalina" if m.get("role") == "assistant" else "Darren",
+                                   str(m.get("content", ""))[:400]) for m in batch)
+    old_facts = facts_snapshot()
+    prompt = (
+        "You are Catalina's long-term memory keeper. Catalina is a devoted, affectionate "
+        "virtual girlfriend; her PERSONALITY is fixed and none of your business - you must "
+        "never add facts about how Catalina acts or speaks.\n\n"
+        "Facts she already knows about Darren and their relationship:\n"
+        + json.dumps(old_facts) +
+        "\n\nRecent conversation messages rolling out of her short-term memory:\n" + convo +
+        "\n\nUpdate her knowledge: keep old facts that are still true, add new durable facts "
+        "about Darren and their relationship (his preferences, plans and dates, stories, people "
+        "in his life, health, work, promises made, inside jokes, milestones), replace outdated "
+        "facts with newer versions, drop duplicates. Maximum 60 facts, each a short "
+        "self-contained third-person sentence about Darren or the couple. "
+        "Reply with ONLY a JSON array of strings.")
+    body = {"model": GROQ_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 900, "temperature": 0.3}
+    try:
+        raw = groq_chat(body)
+        m = re.search(r"\[.*\]", raw, re.S)
+        facts = json.loads(m.group(0)) if m else []
+        if not isinstance(facts, list):
+            facts = []
+    except Exception as e:
+        print("Memory keeper failed, will retry next cycle:", e)
+        return
+    if facts:
+        save_facts(facts[:60])
+        FACTS_CACHE = {"facts": facts[:60], "loaded": True}
+    PENDING_MEMORY = PENDING_MEMORY[: len(PENDING_MEMORY) - len(batch)]
+
+def memory_keeper_loop():
+    """Every 20 minutes she quietly thinks about what she learned."""
+    while True:
+        time.sleep(20 * 60)
+        try:
+            consolidate_memory()
+        except Exception as e:
+            print("Memory keeper hiccup:", e)
+
+
 def load_persona():
     try:
         with open("persona.txt", "r", encoding="utf-8") as f:
@@ -173,6 +271,11 @@ def looks_like_refusal(text):
 
 def think():
     persona = load_persona()
+    known = facts_snapshot()
+    if known:
+        persona += ("\n\nWhat Catalina has learned about Darren over their time together "
+                    "(weave in naturally when relevant, never recite like a list):\n- "
+                    + "\n- ".join(known))
     scrub_history()
     messages = [{"role": "system", "content": persona}]
     messages += history
@@ -824,8 +927,7 @@ def handle(update):
                 print("Face save error:", e)
             history.append({"role": "user",
                             "content": "(sends a photo of me - what I look like: " + desc + ")"})
-            if len(history) > HISTORY_LIMIT:
-                del history[0 : len(history) - HISTORY_LIMIT]
+            trim_history()
             try:
                 reply = think()
             except Exception as e:
@@ -846,8 +948,7 @@ def handle(update):
         if caption:
             user_msg += " with the message: \"" + caption + "\""
         history.append({"role": "user", "content": user_msg})
-        if len(history) > HISTORY_LIMIT:
-            del history[0 : len(history) - HISTORY_LIMIT]
+        trim_history()
         try:
             reply = think()
         except Exception as e:
@@ -904,8 +1005,7 @@ def handle(update):
         if caption:
             user_msg += " with the message: \"" + caption + "\""
         history.append({"role": "user", "content": user_msg})
-        if len(history) > HISTORY_LIMIT:
-            del history[0 : len(history) - HISTORY_LIMIT]
+        trim_history()
         try:
             reply = think()
         except Exception as e:
@@ -954,8 +1054,7 @@ def handle(update):
 
     # --- Normal conversation ---
     history.append({"role": "user", "content": text})
-    if len(history) > HISTORY_LIMIT:
-        del history[0 : len(history) - HISTORY_LIMIT]
+    trim_history()
 
     send_typing(chat_id)
     try:
@@ -1017,8 +1116,7 @@ def send_selfie(chat_id, request_text):
         CAMERA_STATUS["when"] = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()) + " UTC"
         history.append({"role": "user", "content": request_text})
         history.append({"role": "assistant", "content": "(sends a selfie: " + caption + ")"})
-        if len(history) > HISTORY_LIMIT:
-            del history[0 : len(history) - HISTORY_LIMIT]
+        trim_history()
     finally:
         SELFIE_LOCK.release()
 
@@ -1056,8 +1154,7 @@ def send_video_message(chat_id, request_text):
                 history.append({"role": "user", "content": request_text})
                 history.append({"role": "assistant",
                                 "content": "(sends a talking video message: " + caption + ")"})
-                if len(history) > HISTORY_LIMIT:
-                    del history[0 : len(history) - HISTORY_LIMIT]
+                trim_history()
                 return
             print("Lipsync unavailable - falling back to zoom video")
     send_typing(chat_id, "record_video")
@@ -1074,8 +1171,7 @@ def send_video_message(chat_id, request_text):
     CAMERA_STATUS["when"] = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()) + " UTC"
     history.append({"role": "user", "content": request_text})
     history.append({"role": "assistant", "content": "(sends a video message: " + caption + ")"})
-    if len(history) > HISTORY_LIMIT:
-        del history[0 : len(history) - HISTORY_LIMIT]
+    trim_history()
 
 def confirm_updates(offset):
     """Tell Telegram to forget everything before this offset, instantly."""
@@ -1087,6 +1183,7 @@ def confirm_updates(offset):
         print("Confirm error:", e)
 
 def main():
+    threading.Thread(target=memory_keeper_loop, daemon=True).start()
     print("Catalina is waking up...")
     print("Voice mode:", "ON (Hannah, with ears)" if HAS_FFMPEG else "OFF (ffmpeg missing)")
     print("Eyes and camera:", "ON" if HAS_FFMPEG else "OFF")
