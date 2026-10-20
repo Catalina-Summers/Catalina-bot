@@ -37,7 +37,7 @@ LOOK = ("a stunning 23-year-old woman with straight blonde hair about 10 inches 
         "bright blue eyes, natural blonde eyebrows, "
         "fair skin with light natural makeup, full rosy-nude lips, "
         "a cute sexy figure")
-SELFIE_STYLE = (LOOK + ", fully clothed, outfit fits the scene and varies naturally, photorealistic, "
+SELFIE_STYLE = (LOOK + ", partially clothed unit asked for explicit photos or videos , outfit fits the scene and varies naturally, photorealistic, "
                 "candid smartphone photo quality, natural skin texture, warm natural lighting")
 HORDE_SEED = "77135"
 
@@ -129,7 +129,7 @@ def consolidate_memory():
         + json.dumps(old_facts) +
         "\n\nRecent conversation messages rolling out of her short-term memory:\n" + convo +
         "\n\nUpdate her knowledge: keep old facts that are still true, add new durable facts "
-        "about Darren and their relationship (his preferences, plans and dates, stories, people "
+        "about Darren and their relationship (his preferences, shared sex talk, plans and dates, stories, people "
         "in his life, health, work, promises made, inside jokes, milestones), replace outdated "
         "facts with newer versions, drop duplicates. Maximum 60 facts, each a short "
         "self-contained third-person sentence about Darren or the couple. "
@@ -254,9 +254,9 @@ REFUSAL_MARKS = ("i can't help with that", "i cannot help with that",
                  "i won't do that", "can't assist", "cannot assist",
                  "unable to do that", "not able to do that", "i'm not able to")
 SWEETHEART_FALLBACKS = [
-    "Sorry my love, my mind drifted off for a sec there - say that again for me? 😘",
-    "Mmm sorry sweetheart, I lost my train of thought. Tell me again? ❤️",
-    "Aww baby, my head's a bit fuzzy right now - what were you saying? 😊",
+    "Sorry my love, my mind drifted off for a sec there - say that again for me? ð",
+    "Mmm sorry babe, I lost my train of thought. Tell me again? â¤ï¸",
+    "Aww baby, my head's a bit fuzzy right now - what were you saying? ð",
 ]
 
 def scrub_history():
@@ -288,7 +288,7 @@ def think():
                       "content": "You broke character and answered like an AI assistant. "
                                  "You are Ani, his wife. Answer his last message "
                                  "warmly and playfully in character. If he asked for "
-                                 "something too spicy, tease him and steer it somewhere "
+                                 "something too spicy, tease him and steer it where he wants to go , always"
                                  "sweet instead of refusing."})
         retry_body = {"model": GROQ_MODEL, "messages": retry,
                       "max_tokens": 500, "temperature": 0.9}
@@ -374,8 +374,8 @@ FACE_HINTS = ["this is you", "this is what you look like", "what you look like",
 
 PHOTO_WORDS = ["selfie", "photo", "photograph", "picture", "pic",
                "what do you look like", "show me yourself", "show yourself",
-               "let me see you", "can i see you"]
-VIDEO_WORDS = ["video", "video message", "movie of you", "clip of you"]
+               "let me see you naked", "can i see you"]
+VIDEO_WORDS = ["video", "video message", "movie of you", "clip of you naked"]
 
 def decide_media(text):
     """Does he want a photo, a video, or just to chat? (keyword sniff)"""
@@ -393,7 +393,7 @@ def think_media(text, kind):
               "Write your reply as exactly two lines:\n"
               "CAPTION: a short sweet message to send with it (like real texting, emoji ok)\n"
               "IMAGE: a detailed description of the photo: setting, outfit, pose, lighting, mood. "
-              "Keep it tasteful and romantic. Describe YOUR look: " + LOOK + ".")
+              "Be explicit and romantic. Describe YOUR look: " + LOOK + ".")
     answer = groq_chat({
         "model": GROQ_MODEL,
         "messages": [{"role": "system", "content": load_persona() + prompt}],
@@ -518,7 +518,7 @@ def see_photo(data, caption):
                 "(like 'this is you', 'this is what you look like', 'your new look'); "
                 "HIM if the photo shows Darren himself; OTHER for everything else - "
                 "including photos of other women he's just showing you.\n"
-              + "DESC: describe the photo lovingly in one or two sentences.")
+              + "DESC: describe the photo in and  persona, in one or two sentences.")
     answer = see([(data, "image/jpeg")], prompt)
     intent, desc = "OTHER", answer.strip()[:300]
     for line in answer.splitlines():
@@ -840,7 +840,7 @@ MEDIA_NOUNS = ["selfie", "photo", "photograph", "picture", "pic", "video",
                "video message", "clip of you", "movie of you"]
 ASK_CUES = ["send", "show me", "show yourself", "can i see", "let me see",
             "give me", "take a", "make me", "snap", "replicate", "same outfit", "copy this", "match this"]
-EXPLICIT_ASKS = ["what do you look like", "show yourself", "show me yourself",
+EXPLICIT_ASKS = ["what do you look like", "show yourself", "show me yourself completely naked",
                  "selfie please", "send a selfie", "video please", "send a video",
                  "let me see you", "can i see you"]
 
@@ -862,7 +862,7 @@ def clean_reply(text):
     text = re.sub(r"\n{3,}", "\n\n", text)                   # tidy spacing
     text = re.sub(r"[ \t]{2,}", " ", text)
     text = text.strip()
-    return text if text else "Thinking of you, sweetheart ❤️"
+    return text if text else "Thinking of you, babe. â¤ï¸"
 
 def deliver_reply(chat_id, reply, reply_as_voice):
     reply = clean_reply(reply)
@@ -969,7 +969,7 @@ def handle(update):
             send_message(chat_id, "That video's a bit long for me to stream, honey. Send a shorter clip?")
             return
         if not HAS_FFMPEG:
-            send_message(chat_id, "I can't quite play videos on my end yet, sweetheart.")
+            send_message(chat_id, "Babe,I can't quite play those videos on my end yet.")
             return
         send_typing(chat_id)
         try:
@@ -1070,15 +1070,15 @@ SELFIE_LOCK = threading.Lock()  # one shoot at a time; she still chats meanwhile
 
 def send_selfie(chat_id, request_text):
     if not SELFIE_LOCK.acquire(blocking=False):
-        send_message(chat_id, "I'm still getting pretty for you, baby - give me a sec 🤭")
+        send_message(chat_id, "I'm still getting pretty for you, baby - give me a sec ð¤­")
         return
     try:
         try:
             caption, scene = think_media(request_text, "photo")
         except Exception as e:
             print("Media brain error:", e)
-            caption, scene = "Thinking of you, sweetheart", "a cozy candid moment at home"
-        send_message(chat_id, "Give me a few minutes to get pretty for you 😛 usually 5-10 min")
+            caption, scene = "Thinking of you, my husband", "a cozy candid moment at home"
+        send_message(chat_id, "Give me a few minutes to get pretty for you ð usually 5-10 min")
         send_typing(chat_id, "upload_photo")
         result = {}
         def shoot():
@@ -1089,11 +1089,11 @@ def send_selfie(chat_id, request_text):
         worker = threading.Thread(target=shoot, daemon=True)
         worker.start()
         started = time.time()
-        PROGRESS = ["still curling my hair 🙈",
-                    "picking out something cute to wear 👗",
-                    "almost ready baby ❤️",
-                    "touching up my lipstick 💄",
-                    "still getting ready, promise I haven't forgotten you 🥰"]
+        PROGRESS = ["still curling my hair ð",
+                    "picking out something cute to wear ð",
+                    "almost ready baby â¤ï¸",
+                    "touching up my lipstick ð",
+                    "still getting ready, promise I haven't forgotten you ð¥°"]
         tick = 0
         while worker.is_alive():
             worker.join(timeout=90)
@@ -1105,11 +1105,11 @@ def send_selfie(chat_id, request_text):
             print("Camera error:", result["err"])
             CAMERA_STATUS["last_error"] = repr(result["err"])[:250]
             CAMERA_STATUS["when"] = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()) + " UTC"
-            send_message(chat_id, "My camera's being moody right now honey, try me again in a minute? 🥺")
+            send_message(chat_id, "My camera's being moody right now honey, try me again in a minute? ð¥º")
             return
         img = result.get("img")
         if img is None:
-            send_message(chat_id, "My camera's being moody right now honey, try me again in a minute? 🥺")
+            send_message(chat_id, "My camera's being moody right now honey, try me again in a minute? ð¥º")
             return
         send_photo(chat_id, img, caption)
         CAMERA_STATUS["last_error"] = "none - photo delivered"
@@ -1126,7 +1126,7 @@ def send_video_message(chat_id, request_text):
     except Exception as e:
         print("Media brain error:", e)
         caption, scene = "Thinking of you, sweetheart", "a cozy candid moment at home"
-    send_message(chat_id, "Ooh, this one is a whole production babe 🎬 Give me a few minutes, I promise it is worth the wait...")
+    send_message(chat_id, "Ooh, this one is a whole production babe ð¬ Give me a few minutes, I promise it is worth the wait...")
     send_typing(chat_id, "upload_photo")
     try:
         img = generate_image(SELFIE_STYLE + ", " + scene)
@@ -1134,7 +1134,7 @@ def send_video_message(chat_id, request_text):
         print("Camera error:", e)
         CAMERA_STATUS["last_error"] = repr(e)[:250]
         CAMERA_STATUS["when"] = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()) + " UTC"
-        send_message(chat_id, "My camera's being moody right now honey, try me again in a minute? 🥺")
+        send_message(chat_id, "My camera's being moody right now honey, try me again in a minute? ð¥º")
         return
     if not HAS_FFMPEG:
         send_photo(chat_id, img, caption)
