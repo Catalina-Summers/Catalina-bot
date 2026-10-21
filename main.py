@@ -8,7 +8,7 @@ import base64, io, json, os, random, re, subprocess, tempfile
 import threading, time, urllib.error, urllib.parse, urllib.request, wave
 from datetime import datetime
 
-VERSION = "ani-10"
+VERSION = "ani-11"
 
 # ---------------------------------------------------------------- config
 def env(*names, default=None, required=True):
@@ -24,10 +24,16 @@ def env(*names, default=None, required=True):
 
 BOT_TOKEN = env("TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN", "BOT_TOKEN", "TG_TOKEN")
 GROQ_KEY  = env("GROQ_API_KEY", "GROQ_KEY", "GROQ_TOKEN")
+
+# accepts the token under any of these names, including the studio one
 GH_TOKEN  = env("GITHUB_TOKEN", "GH_TOKEN", "GITHUB_PAT", "GH_PAT",
                 "GITHUB_API_TOKEN", "GIT_TOKEN", "GITHUB_KEY", "PAT",
+                "STUDIO_GITHUB_TOKEN", "STUDIO_TOKEN",
                 required=False)
-GH_REPO   = env("GITHUB_REPO", "GH_REPO", "REPO", "GITHUB_REPOSITORY",
+
+# NOTE: STUDIO_REPO is deliberately NOT an alias here, because it points at
+# the studio repo, not the bot repo.
+GH_REPO   = env("GITHUB_REPO", "GH_REPO", "BOT_REPO",
                 default="Catalina-Summers/Catalina-bot", required=False)
 GH_BRANCH = os.environ.get("GITHUB_BRANCH", "main")
 
@@ -48,7 +54,9 @@ STT_MODEL    = "whisper-large-v3-turbo"
 MAX_TOKENS   = int(os.environ.get("MAX_TOKENS", "1200"))
 
 HORDE_API = "https://aihorde.net/api/v2"
-HORDE_KEY = os.environ.get("HORDE_API_KEY", "0000000000")
+# accepts the misspelled HORDE_API_K too
+HORDE_KEY = env("HORDE_API_KEY", "HORDE_API_K", "HORDE_KEY",
+                default="0000000000", required=False)
 HORDE_POLL = float(os.environ.get("HORDE_POLL_SECONDS", "7"))
 HORDE_POLLS = int(os.environ.get("HORDE_MAX_POLLS", "150"))
 HORDE_POST = os.environ.get("HORDE_POST", "")
@@ -707,8 +715,6 @@ def debug_report():
     lines = ["--- ani debug ---",
              f"version:      {VERSION}",
              f"chat_model:   {CHAT_MODEL}",
-             f"reasoning:    {REASONING_EFFORT or '(off)'}",
-             f"vision_model: {VISION_MODEL}",
              f"gh_token_set: {bool(GH_TOKEN)}",
              f"gh_repo:      {GH_REPO or '(MISSING)'}",
              f"horde_key:    {'custom' if HORDE_KEY != '0000000000' else 'anonymous'}",
@@ -729,16 +735,9 @@ def debug_report():
 
     t("A_bare_nosystem",
       [{"role": "user", "content": "say the single word OK"}])
-    t("B_tiny_system",
-      [{"role": "system", "content": "you are ani, a flirty 23 year old wife. "
-                                     "reply casually, lowercase."},
-       {"role": "user", "content": "hey babe"}])
     t("C_full_system",
       [{"role": "system", "content": SYSTEM},
        {"role": "user", "content": "hey babe"}])
-    t("D_other_model",
-      [{"role": "user", "content": "say the single word OK"}],
-      model="openai/gpt-oss-20b")
     return "\n".join(lines)
 
 def health_server():
@@ -770,18 +769,14 @@ def health_server():
 
 def env_report():
     print(f"--- ani {VERSION} ---")
-    for n in ["TELEGRAM_BOT_TOKEN", "GROQ_API_KEY", "GITHUB_TOKEN", "GH_TOKEN",
-              "GITHUB_REPO", "GH_REPO", "HORDE_API_KEY", "CHAT_MODEL", "PORT"]:
+    for n in ["TELEGRAM_BOT_TOKEN", "GROQ_API_KEY", "GITHUB_TOKEN",
+              "STUDIO_GITHUB_TOKEN", "GITHUB_REPO", "STUDIO_REPO",
+              "HORDE_API_KEY", "HORDE_API_K", "CHAT_MODEL", "PORT"]:
         v = os.environ.get(n)
         print(f"  {n}: SET ({len(v)} chars)" if v else f"  {n}: missing")
     print("------------------")
-    if not GH_TOKEN:
-        print("WARNING: no github token found - memory disabled, reading public files instead")
-    if not GH_REPO:
-        print("WARNING: no github repo found - memory and persona disabled")
 
 if __name__ == "__main__":
-    __import__("sys").stdout.reconfigure(line_buffering=True)
     env_report()
     threading.Thread(target=health_server, daemon=True).start()
     load_history()
