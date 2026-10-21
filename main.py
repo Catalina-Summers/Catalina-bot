@@ -8,7 +8,7 @@ import base64, io, json, os, random, re, subprocess, tempfile
 import threading, time, urllib.error, urllib.parse, urllib.request, wave
 from datetime import datetime
 
-VERSION = "ani-6"
+VERSION = "ani-8"
 
 # ---------------------------------------------------------------- config
 def env(*names, default=None, required=True):
@@ -34,10 +34,6 @@ PERSONA_PATH    = os.environ.get("PERSONA_PATH", "persona.txt")
 HISTORY_PATH    = os.environ.get("HISTORY_PATH", "history.json")
 LATEST_REF_PATH = os.environ.get("LATEST_REF_PATH", "latest_ref.jpg")
 
-STUDIO_TOKEN    = os.environ.get("STUDIO_TOKEN")
-STUDIO_REPO     = os.environ.get("STUDIO_REPO")
-STUDIO_WORKFLOW = os.environ.get("STUDIO_WORKFLOW", "studio.yml")
-
 GROQ_API   = "https://api.groq.com/openai/v1"
 CHAT_API   = os.environ.get("CHAT_API", GROQ_API)
 CHAT_KEY   = os.environ.get("CHAT_API_KEY", GROQ_KEY)
@@ -53,11 +49,17 @@ HORDE_API = "https://aihorde.net/api/v2"
 HORDE_KEY = os.environ.get("HORDE_API_KEY", "0000000000")
 HORDE_POLL = float(os.environ.get("HORDE_POLL_SECONDS", "7"))
 HORDE_POLLS = int(os.environ.get("HORDE_MAX_POLLS", "150"))
-HORDE_POST = os.environ.get("HORDE_POST", "CodeFormers")
+HORDE_POST = os.environ.get("HORDE_POST", "")
+HORDE_USE_REF = os.environ.get("HORDE_USE_REF", "1") == "1"
+HORDE_W = int(os.environ.get("HORDE_WIDTH", "832"))
+HORDE_H = int(os.environ.get("HORDE_HEIGHT", "1216"))
+
 HORDE_MODELS = [m.strip() for m in os.environ.get(
     "HORDE_MODELS",
-    "Juggernaut XL,Realistic Vision,ICBINP XL,CyberRealistic Pony,"
-    "Pony Realism,AlbedoBase XL (SDXL),DreamShaper XL").split(",") if m.strip()]
+    "Juggernaut XL,ICBINP XL,DreamShaper XL,AlbedoBase XL (SDXL)").split(",")
+    if m.strip()]
+
+MEDIA_COOLDOWN = float(os.environ.get("MEDIA_COOLDOWN", "45"))
 
 TG = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
@@ -74,7 +76,8 @@ SELFIE_STYLE = (LOOK + ", photorealistic candid smartphone photo, natural skin "
                 "texture, soft natural lighting, shallow depth of field")
 
 NEGATIVE = ("lowres, blurry, deformed hands, extra limbs, watermark, text, "
-            "jpeg artifacts, cartoon, 3d render, plastic skin")
+            "jpeg artifacts, cartoon, plastic skin, over-saturated, "
+            "painting, illustration")
 
 STYLE_CARD = """
 HARD RULES, never break these:
@@ -385,25 +388,28 @@ def to_webp_b64(jpg):
             i, o = f"{d}/a.jpg", f"{d}/a.webp"
             open(i, "wb").write(jpg)
             subprocess.run([FFMPEG, "-y", "-loglevel", "error", "-i", i,
-                            "-vf", "scale=768:-1", o], check=True)
+                            "-vf", f"scale={HORDE_W}:-1", o], check=True)
             return base64.b64encode(open(o, "rb").read()).decode()
     except Exception:
         return base64.b64encode(jpg).decode()
 
 def pick_face():
+    if not HORDE_USE_REF:
+        return None
     d = gh(LATEST_REF_PATH, raw=True)
     return to_webp_b64(d) if d else None
 
 def generate_image(scene, explicit=False):
-    params = {"width": 512, "height": 768, "steps": 28, "n": 1,
+    params = {"width": HORDE_W, "height": HORDE_H, "steps": 30, "n": 1,
               "cfg_scale": 7, "sampler_name": "k_euler_a",
               "seed": str(random.randint(1, 999999999))}
     if HORDE_POST:
         params["post_processing"] = [p.strip() for p in HORDE_POST.split(",")
                                      if p.strip()]
 
+    prompt = f"{SELFIE_STYLE}, {scene}"
     payload = {
-        "prompt": f"{SELFIE_STYLE}, {scene}",
+        "prompt": prompt,
         "negative_prompt": NEGATIVE,
         "params": params,
         "nsfw": True,
@@ -417,14 +423,28 @@ def generate_image(scene, explicit=False):
     if face:
         payload["source_image"] = face
         payload["source_processing"] = "img2img"
-        payload["params"]["denoising_strength"] = 0.62 if explicit else 0.55
+        payload["params"]["denoising_strength"] = 0.68 if explicit else 0.60
 
     h = {"apikey": HORDE_KEY, "Client-Agent": "ani-bot:1.0"}
-    r = json.loads(_json(f"{HORDE_API}/generate/async", payload, h))
+
+    def submit():
+        return json.loads(_json(f"{HORDE_API}/generate/async", payload, h))
+
+    try:
+        r = submit()
+    except Exception as e:
+        if "CorruptPrompt" in str(e) or "terms of service" in str(e):
+            print("horde rejected prompt, retrying with their sanitiser on")
+            payload["replacement_filter"] = True
+            r = submit()
+        else:
+            raise
+
     rid = r.get("id")
     if not rid:
         raise RuntimeError(f"horde rejected: {r}")
 
+    st = {}
     for i in range(HORDE_POLLS):
         time.sleep(HORDE_POLL)
         if i % 4 == 3:
@@ -442,18 +462,16 @@ def generate_image(scene, explicit=False):
         if gens:
             return _req(gens[0]["img"], timeout=120)
         if i % 10 == 9:
-            print("horde waiting:", st.get("waiting"), st.get("queue_position"),
-                  st.get("is_possible"))
-    raise RuntimeError(
-        f"horde timeout after {int(HORDE_POLLS * HORDE_POLL)}s "
-        f"(queue pos {st.get('queue_position')}, possible={st.get('is_possible')})")
+            print("horde waiting:", st.get("waiting"), st.get("queue_position"))
+    raise RuntimeError(f"horde timeout, queue pos {st.get('queue_position')}")
 
 def build_scene(kind, description):
     try:
         out = chat([{"role": "system", "content":
-                     "turn the request into a short stable-diffusion prompt "
-                     "describing scene, pose, clothing or lack of it, and mood. "
-                     "lowercase, comma separated, no preamble, max 25 words."},
+                     "turn the request into a short stable-diffusion prompt. "
+                     "describe scene, pose, clothing or lack of it, and mood. "
+                     "lowercase, comma separated, no preamble, max 20 words. "
+                     "do not mention hair colour or eye colour."},
                     {"role": "user", "content": description}],
                    temp=0.6, max_tokens=80)
         return out.strip().strip('"')
@@ -548,21 +566,39 @@ def handle_video(msg):
         tg_send(f"video hiccup: {e}")
 
 # ------------------------------------------------------------- media intent
-PHOTO_WORDS = ["selfie", "photo", "pic", "picture", "send me a", "show me you",
-               "camera", "snap"]
-VIDEO_WORDS = ["video", "clip", "video note", "movie", "motion"]
+REQUEST_WORDS = ["send", "show", "take", "snap", "give", "let me see",
+                 "another", "how about", "see"]
 
 def wants_media(text):
     low = text.lower()
-    if any(w in low for w in VIDEO_WORDS):
-        return "video"
-    if any(w in low for w in PHOTO_WORDS):
-        return "photo"
+    kind = None
+    if re.search(r"\b(video|clip|vid)\b", low):
+        kind = "video"
+    elif re.search(r"\b(photo|pic|picture|selfie|snap|shot)\b", low):
+        kind = "photo"
+    if not kind:
+        return None
+    if re.search(r"\bselfie\b", low):
+        return kind
+    if any(w in low for w in REQUEST_WORDS):
+        return kind
     return None
 
+MEDIA_LOCK = threading.Lock()
+MEDIA_LAST = 0.0
+
 def send_media(kind, description):
-    tg_action("upload_photo" if kind == "photo" else "upload_video")
+    global MEDIA_LAST
+    now = time.time()
+    if now - MEDIA_LAST < MEDIA_COOLDOWN:
+        print("media cooldown, skipping")
+        return
+    if not MEDIA_LOCK.acquire(blocking=False):
+        print("media busy, skipping")
+        return
+    MEDIA_LAST = now
     try:
+        tg_action("upload_photo" if kind == "photo" else "upload_video")
         scene = build_scene(kind, description)
         explicit = any(w in description.lower() for w in
                        ["nude", "naked", "topless", "explicit", "undress",
@@ -583,6 +619,8 @@ def send_media(kind, description):
             tg_photo(img)
     except Exception as e:
         tg_send(f"couldn't take a picture just now ({e})")
+    finally:
+        MEDIA_LOCK.release()
 
 # -------------------------------------------------------------------- loop
 def handle(msg):
@@ -638,8 +676,10 @@ def debug_report():
              f"gh_token_set: {bool(GH_TOKEN)}",
              f"gh_repo:      {GH_REPO or '(MISSING)'}",
              f"horde_key:    {'custom' if HORDE_KEY != '0000000000' else 'anonymous'}",
-             f"horde_models: {len(HORDE_MODELS)}",
+             f"horde_size:   {HORDE_W}x{HORDE_H}",
+             f"horde_models: {', '.join(HORDE_MODELS)}",
              f"horde_post:   {HORDE_POST or '(off)'}",
+             f"horde_use_ref:{HORDE_USE_REF}",
              f"persona_len:  {len(PERSONA)}",
              f"history_len:  {len(history)}",
              "--- live probe ---"]
