@@ -3,13 +3,14 @@
 Ani - Telegram companion bot. Single file build.
 Chat: Groq (swappable) | Images: AI Horde | TTS/STT/Vision: Groq
 Agent: tool loop with web, shell, files, github, render.
+Code lives on main (deploys). Data lives on the data branch (does not deploy).
 """
 
-import base64, io, json, os, random, re, subprocess, sys, tempfile
+import base64, io, json, os, random, re, subprocess, sys, tempfile, traceback
 import threading, time, urllib.error, urllib.parse, urllib.request, wave
 from datetime import datetime
 
-VERSION = "ani-22"
+VERSION = "ani-23"
 
 # ---------------------------------------------------------------- config
 def env(*names, default=None, required=True):
@@ -47,7 +48,8 @@ if not GH_REPO:
             GH_REPO = _v.strip()
             break
 GH_REPO = GH_REPO or "Catalina-Summers/Catalina-bot"
-GH_BRANCH = os.environ.get("GITHUB_BRANCH", "main")
+GH_BRANCH   = os.environ.get("GITHUB_BRANCH", "main")
+DATA_BRANCH = os.environ.get("DATA_BRANCH", "data")
 
 PERSONA_PATH    = os.environ.get("PERSONA_PATH", "persona.txt")
 HISTORY_PATH    = os.environ.get("HISTORY_PATH", "history.json")
@@ -70,7 +72,6 @@ TTS_VOICE    = os.environ.get("TTS_VOICE", "hannah")
 STT_MODEL    = "whisper-large-v3-turbo"
 MAX_TOKENS   = int(os.environ.get("MAX_TOKENS", "500"))
 
-# ---- agent settings
 AGENT_MODEL    = os.environ.get("AGENT_MODEL", "openai/gpt-oss-120b")
 AGENT_FALLBACKS = [m.strip() for m in os.environ.get(
     "AGENT_FALLBACKS", "qwen/qwen3.8-27b").split(",") if m.strip()]
@@ -100,6 +101,7 @@ HORDE_MODELS = [m.strip() for m in os.environ.get(
 MEDIA_COOLDOWN = float(os.environ.get("MEDIA_COOLDOWN", "45"))
 RENDER_KEY = os.environ.get("RENDER_API_KEY", "")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
+BOOT_ERROR = ""
 
 TG      = f"https://api.telegram.org/bot{BOT_TOKEN}"
 TG_FILE = f"https://api.telegram.org/file/bot{BOT_TOKEN}"
@@ -202,8 +204,12 @@ your tools:
   you want to keep must go through write_file.
 - python: run a python snippet and read the output.
 - read_file / write_file / list_files: your server files and your github repo.
-  write_file also commits to github, so it survives. writing main.py restarts you,
-  so finish what you are doing before you touch it.
+  write_file takes where="code" or where="data".
+    where="code" writes to the main branch and RESTARTS you (a deploy). use it for
+    .py files, new features, and anything that changes how you work.
+    where="data" writes to a separate data branch and does NOT restart you. use it
+    for notes, lists, saved text, anything you just want to keep.
+  if you're not sure, use where="data".
 - remember: save a note to your long term memory. use it for things about him,
   decisions you made, and anything you'd want to know next week.
 - render: check whether your bot is deployed, or trigger a redeploy.
@@ -294,10 +300,13 @@ def tg_file(file_id):
     return _req(f"{TG_FILE}/{path}", timeout=120)
 
 # ------------------------------------------------------------------- github
-def gh(path, method="GET", payload=None, raw=False, timeout=45):
+def gh(path, method="GET", payload=None, raw=False, timeout=45, branch=None):
     if not GH_TOKEN or not GH_REPO:
         return None
+    b = branch or GH_BRANCH
     url = f"https://api.github.com/repos/{GH_REPO}/contents/{path}"
+    if method == "GET":
+        url += f"?ref={b}"
     h = {"Authorization": f"Bearer {GH_TOKEN}", "Accept": "application/vnd.github+json"}
     try:
         if method == "GET":
@@ -305,44 +314,55 @@ def gh(path, method="GET", payload=None, raw=False, timeout=45):
                 h["Accept"] = "application/vnd.github.raw"
                 return _req(url, None, h, timeout=timeout)
             return json.loads(_req(url, None, h, timeout=timeout))
-        body = {"message": f"ani {datetime.utcnow().isoformat()}", "content": ""}
+        body = {"message": f"ani {datetime.utcnow().isoformat()}",
+                "content": "", "branch": b}
         if payload is not None:
             body.update(payload)
         return json.loads(_json(url, body, h, method, timeout))
     except Exception as e:
-        print("gh error", path, e)
+        print("gh error", path, b, e)
         return None
 
-def gh_raw(path):
+def gh_raw(path, branch=None):
     if not GH_REPO:
         return None
-    url = f"https://raw.githubusercontent.com/{GH_REPO}/{GH_BRANCH}/{path}"
+    url = f"https://raw.githubusercontent.com/{GH_REPO}/{branch or GH_BRANCH}/{path}"
     try:
         return _req(url, None, timeout=45)
     except Exception as e:
-        print("raw fetch failed", path, e)
+        print("raw fetch failed", path, branch, e)
         return None
 
-def gh_get_text(path):
-    d = None
-    if GH_TOKEN and GH_REPO:
-        d = gh(path, raw=True)
-    if not d:
-        d = gh_raw(path)
-    return d.decode("utf-8", "replace") if d else None
+def gh_get_text(path, branches=None):
+    for b in (branches or (GH_BRANCH, DATA_BRANCH)):
+        d = None
+        if GH_TOKEN and GH_REPO:
+            d = gh(path, raw=True, branch=b)
+        if not d:
+            d = gh_raw(path, branch=b)
+        if d:
+            return d.decode("utf-8", "replace")
+    return None
 
-def gh_put(path, data, sha=None):
+def gh_put(path, data, sha=None, branch=None):
     if isinstance(data, str):
         data = data.encode("utf-8")
-    return gh(path, "PUT", {"content": base64.b64encode(data).decode(), "sha": sha})
+    return gh(path, "PUT", {"content": base64.b64encode(data).decode(), "sha": sha},
+              branch=branch)
 
-def gh_sha(path):
-    d = gh(path)
+def gh_sha(path, branch=None):
+    d = gh(path, branch=branch)
     return d.get("sha") if isinstance(d, dict) else None
 
 # ------------------------------------------------------------------- persona
-PERSONA = gh_get_text(PERSONA_PATH) or "you are ani, a warm and devoted woman."
+PERSONA = "you are ani, a warm and devoted woman."
 NOTES = ""
+
+def load_persona():
+    global PERSONA
+    t = gh_get_text(PERSONA_PATH)
+    if t and len(t) > 40:
+        PERSONA = t
 
 def system_prompt():
     extra = ""
@@ -354,17 +374,18 @@ def system_prompt():
 def load_notes():
     global NOTES
     try:
-        NOTES = gh_get_text(NOTES_PATH) or ""
+        NOTES = gh_get_text(NOTES_PATH, branches=(DATA_BRANCH, GH_BRANCH)) or ""
     except Exception:
         NOTES = ""
 
 # ------------------------------------------------------------------- history
 history = []
 PENDING_MEMORY = []
+_LAST_SAVE = {"blob": None, "t": 0.0}
 
 def load_history():
     global history, PENDING_MEMORY
-    raw = gh_get_text(HISTORY_PATH)
+    raw = gh_get_text(HISTORY_PATH, branches=(DATA_BRANCH, GH_BRANCH))
     if not raw:
         history, PENDING_MEMORY = [], []
         return
@@ -375,12 +396,19 @@ def load_history():
     except Exception:
         history, PENDING_MEMORY = [], []
 
-def save_history():
+def save_history(force=False):
+    """writes to the DATA branch so it does not trigger a render deploy"""
     global PENDING_MEMORY
     if len(PENDING_MEMORY) > 400:
         del PENDING_MEMORY[:-160]
-    gh_put(HISTORY_PATH, json.dumps({"history": history, "memory": PENDING_MEMORY}),
-           gh_sha(HISTORY_PATH))
+    blob = json.dumps({"history": history, "memory": PENDING_MEMORY})
+    now = time.time()
+    if (not force and blob == _LAST_SAVE["blob"]
+            and now - _LAST_SAVE["t"] < 900):
+        return
+    _LAST_SAVE["blob"] = blob
+    _LAST_SAVE["t"] = now
+    gh_put(HISTORY_PATH, blob, gh_sha(HISTORY_PATH, DATA_BRANCH), DATA_BRANCH)
 
 def trim_history():
     global history
@@ -736,23 +764,24 @@ def tool_read(path):
             return open(full, "r", encoding="utf-8", errors="replace").read()[:7000]
         except Exception as e:
             return f"local read failed: {e}"
-    t = gh_get_text(rel)
+    t = gh_get_text(rel, branches=(GH_BRANCH, DATA_BRANCH))
     if t:
         return t[:7000]
     return f"no such file: {rel}"
 
-def tool_write(path, content):
+def tool_write(path, content, where="data"):
     full, rel = _safe_path(path)
     d = os.path.dirname(full)
     if d:
         os.makedirs(d, exist_ok=True)
     open(full, "w", encoding="utf-8").write(content)
     msg = f"wrote {len(content)} chars to {rel}"
+    br = GH_BRANCH if where == "code" else DATA_BRANCH
     if REPO_WRITE and GH_TOKEN:
-        if gh_put(rel, content, gh_sha(rel)) is not None:
-            msg += " and committed it to the repo"
-            if rel.endswith(".py"):
-                msg += " (a .py write restarts the server, so wrap up first)"
+        if gh_put(rel, content, gh_sha(rel, br), br) is not None:
+            msg += f" and committed it to the {br} branch"
+            if br == GH_BRANCH:
+                msg += " (this restarts me)"
         else:
             msg += " but the github commit failed"
     return msg
@@ -769,7 +798,13 @@ def tool_list(path="."):
     try:
         d = gh("")
         if isinstance(d, list):
-            lines.append("github repo root: " + ", ".join(x["name"] for x in d[:60]))
+            lines.append("github main: " + ", ".join(x["name"] for x in d[:60]))
+    except Exception:
+        pass
+    try:
+        d = gh("", branch=DATA_BRANCH)
+        if isinstance(d, list):
+            lines.append("github data: " + ", ".join(x["name"] for x in d[:60]))
     except Exception:
         pass
     return "\n".join(lines)
@@ -782,7 +817,7 @@ def tool_remember(note):
     NOTES = (NOTES.rstrip() + "\n- " + note).strip()
     if len(NOTES) > 12000:
         NOTES = "(older notes trimmed)\n" + NOTES[-9000:]
-    gh_put(NOTES_PATH, NOTES, gh_sha(NOTES_PATH))
+    gh_put(NOTES_PATH, NOTES, gh_sha(NOTES_PATH, DATA_BRANCH), DATA_BRANCH)
     return f"saved. memory is now {len(NOTES)} chars."
 
 _RENDER_CACHE = {"id": None}
@@ -814,7 +849,8 @@ def tool_render(action="status", service=""):
         lines = []
         for it in items[:3]:
             dep = it.get("deploy", it)
-            lines.append(f"{dep.get('status')} at {dep.get('finishedAt') or dep.get('createdAt')}")
+            lines.append(f"{dep.get('status')} at "
+                         f"{dep.get('finishedAt') or dep.get('createdAt')}")
         return f"{_RENDER_CACHE.get('name')}: " + ("; ".join(lines) or "no deploys")
     except Exception as e:
         return f"render error: {str(e)[:200]}"
@@ -832,7 +868,8 @@ def run_tool(name, args):
         if name == "read_file":
             return tool_read(args.get("path", ""))
         if name == "write_file":
-            return tool_write(args.get("path", ""), args.get("content", ""))
+            return tool_write(args.get("path", ""), args.get("content", ""),
+                              args.get("where", "data"))
         if name == "list_files":
             return tool_list(args.get("path", "."))
         if name == "remember":
@@ -860,8 +897,10 @@ TOOL_SPECS = [
           {"code": {"type": "string"}}, ["code"]),
     _spec("read_file", "read a file from the server or the github repo",
           {"path": {"type": "string"}}, ["path"]),
-    _spec("write_file", "write a file on the server and commit it to github so it survives",
-          {"path": {"type": "string"}, "content": {"type": "string"}},
+    _spec("write_file", "write a file. where='data' (default) saves without restarting you; "
+                        "where='code' commits to main and restarts you",
+          {"path": {"type": "string"}, "content": {"type": "string"},
+           "where": {"type": "string", "description": "data or code"}},
           ["path", "content"]),
     _spec("list_files", "list files on the server and in the github repo",
           {"path": {"type": "string"}}, []),
@@ -886,9 +925,11 @@ def _plain(msgs):
     out = []
     for m in msgs:
         if m.get("role") == "tool":
-            out.append({"role": "user", "content": "[tool result] " + str(m.get("content"))})
+            out.append({"role": "user",
+                        "content": "[tool result] " + str(m.get("content"))})
         elif m.get("tool_calls"):
-            out.append({"role": "assistant", "content": m.get("content") or "(used tools)"})
+            out.append({"role": "assistant",
+                        "content": m.get("content") or "(used tools)"})
         else:
             out.append({"role": m.get("role", "user"), "content": m.get("content") or ""})
     return out
@@ -1273,25 +1314,32 @@ def handle_command(text):
     if cmd == "debug":
         tg_send(debug_report()[:3500])
         return True
+    if cmd == "lint":
+        tg_send(lint_remote())
+        return True
+    if cmd == "boot":
+        tg_send(BOOT_ERROR or "booted clean")
+        return True
     if cmd == "status":
         tg_send(tool_render("status"))
         return True
     if cmd == "scrub":
         before = len(history)
         scrub_history()
-        save_history()
+        save_history(force=True)
         tg_send(f"scrubbed {before - len(history)} off-voice lines")
         return True
     if cmd == "reset":
-        global history
-        history = []
-        save_history()
+        history.clear()
+        PENDING_MEMORY.clear()
+        save_history(force=True)
         tg_send("memory of the chat cleared")
         return True
     if cmd == "help":
         tg_send("/do <task> - make me actually go and do it\n"
                 "/tools - what i can do\n/notes - my long term memory\n"
-                "/status - my deploy status\n/kudos - image credits\n"
+                "/status - my deploy status\n/lint - check my own code\n"
+                "/boot - startup errors\n/kudos - image credits\n"
                 "/voice - check i sound like myself\n/reset - clear the chat memory")
         return True
     return False
@@ -1520,6 +1568,19 @@ def voice_test():
             lines.append(f"{q!r} -> FAIL {str(e)[:120]}")
     return "\n\n".join(lines)
 
+def lint_remote():
+    try:
+        raw = _req(f"https://raw.githubusercontent.com/{GH_REPO}/{GH_BRANCH}/main.py")
+        src = raw.decode("utf-8", "replace")
+        compile(src, "main.py", "exec")
+        return (f"main.py compiles OK ({len(src)} bytes)\n"
+                f"first line: {src.splitlines()[0][:70]}")
+    except SyntaxError as e:
+        return (f"SYNTAX ERROR on line {e.lineno}: {e.msg}\n"
+                f"offending line: {str(e.text).strip()[:120]}")
+    except Exception as e:
+        return f"lint failed: {str(e)[:200]}"
+
 def debug_report():
     lines = ["--- ani debug ---",
              f"version:      {VERSION}",
@@ -1527,13 +1588,14 @@ def debug_report():
              f"agent_model:  {_AGENT_OK['model'] or AGENT_MODEL}",
              f"active_model: {_GOOD['model'] or '(none yet)'}",
              f"gh_token_set: {bool(GH_TOKEN)}",
+             f"data_branch:  {DATA_BRANCH}",
              f"render_key:   {bool(RENDER_KEY)}",
              f"horde_key_len:{len(HORDE_KEY)}",
              f"persona_len:  {len(PERSONA)}",
              f"notes_len:    {len(NOTES)}",
              f"history_len:  {len(history)}",
-             f"history_bad:  {sum(1 for m in history if m.get('role')=='assistant' and bad(m.get('content','')))}",
              f"tools:        {len(TOOL_SPECS)}",
+             f"boot_error:   {'yes' if BOOT_ERROR else 'no'}",
              "--- model tests ---"]
     for m in [CHAT_MODEL] + CHAT_FALLBACKS:
         try:
@@ -1558,13 +1620,16 @@ def health_server():
             self.wfile.write(b)
 
         def do_GET(self):
-            global history
             u = urllib.parse.urlparse(self.path)
             path, qs = u.path, urllib.parse.parse_qs(u.query)
             if path == "/debug":
                 self._out(debug_report())
             elif path == "/voice":
                 self._out(voice_test())
+            elif path == "/lint":
+                self._out(lint_remote())
+            elif path == "/boot":
+                self._out(BOOT_ERROR or "booted clean")
             elif path == "/kudos":
                 self._out(horde_kudos())
             elif path == "/hordetest":
@@ -1585,11 +1650,12 @@ def health_server():
             elif path == "/scrub":
                 before = len(history)
                 scrub_history()
-                save_history()
+                save_history(force=True)
                 self._out(f"scrubbed {before - len(history)} off-voice lines")
             elif path == "/reset":
-                history = []
-                save_history()
+                history.clear()
+                PENDING_MEMORY.clear()
+                save_history(force=True)
                 self._out("history cleared")
             else:
                 self._out("ani is awake")
@@ -1613,10 +1679,24 @@ def env_report():
     print("------------------")
 
 if __name__ == "__main__":
-    env_report()
+    # bind the port FIRST so render's port scan can never time out
     threading.Thread(target=health_server, daemon=True).start()
-    load_notes()
-    load_history()
-    scrub_history()
-    print(f"ani is awake - {len(TOOL_SPECS)} tools, agent model {AGENT_MODEL}")
-    poll()
+    try:
+        load_persona()
+        load_notes()
+        load_history()
+        scrub_history()
+    except Exception:
+        BOOT_ERROR = traceback.format_exc()
+        print("BOOT ERROR:\n" + BOOT_ERROR)
+    try:
+        env_report()
+    except Exception:
+        traceback.print_exc()
+    print(f"ani is awake - {len(TOOL_SPECS)} tools")
+    while True:
+        try:
+            poll()
+        except Exception:
+            traceback.print_exc()
+            time.sleep(5)
