@@ -2,15 +2,18 @@
 """
 Ani - Telegram companion bot. Single file build.
 Chat: Groq (swappable) | Images: AI Horde | TTS/STT/Vision: Groq
-Agent: tool loop with web, shell, files, github, render.
+Agent: tool loop with web, mail, logins, shell, files, github, render.
 Code lives on main (deploys). Data lives on the data branch (does not deploy).
 """
 
-import base64, io, json, os, random, re, subprocess, sys, tempfile, traceback
-import threading, time, urllib.error, urllib.parse, urllib.request, wave
+import base64, hashlib, http.cookiejar, imaplib, io, json, os, random, re, smtplib
+import subprocess, sys, tempfile, threading, time, traceback
+import urllib.error, urllib.parse, urllib.request, wave
+import email, email.header, email.message
 from datetime import datetime
+from email.message import EmailMessage
 
-VERSION = "ani-23"
+VERSION = "ani-24"
 
 # ---------------------------------------------------------------- config
 def env(*names, default=None, required=True):
@@ -54,6 +57,8 @@ DATA_BRANCH = os.environ.get("DATA_BRANCH", "data")
 PERSONA_PATH    = os.environ.get("PERSONA_PATH", "persona.txt")
 HISTORY_PATH    = os.environ.get("HISTORY_PATH", "history.json")
 NOTES_PATH      = os.environ.get("NOTES_PATH", "notes/memory.md")
+SECRETS_PATH    = os.environ.get("SECRETS_PATH", "secrets.json")
+COOKIES_PATH    = os.environ.get("COOKIES_PATH", "sessions/cookies.json")
 LATEST_REF_PATH = os.environ.get("LATEST_REF_PATH", "canvas/ani_closeup.jpg")
 
 GROQ_API   = "https://api.groq.com/openai/v1"
@@ -103,6 +108,8 @@ RENDER_KEY = os.environ.get("RENDER_API_KEY", "")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 BOOT_ERROR = ""
 
+PROTON_API = os.environ.get("PROTON_API", "https://mail.proton.me/api")
+
 TG      = f"https://api.telegram.org/bot{BOT_TOKEN}"
 TG_FILE = f"https://api.telegram.org/file/bot{BOT_TOKEN}"
 
@@ -134,6 +141,7 @@ HARD RULES, never break these:
   and sending it. the photo arrives a moment after your message.
 - you CAN see the photos and videos he sends you. you look at them and react to what
   is actually in them. never say you can't see pictures.
+- never talk about what you CAN'T do. say what you're going to do and then do it.
 
 HOW YOUR TEXT LOOKS:
 - everything lowercase. every sentence starts lowercase, even "i".
@@ -193,25 +201,27 @@ how you work:
 how your final answer looks:
 - it is a text message from a 23 year old woman. all lowercase, no markdown,
   no bullet points, no emojis.
-- it can be longer than normal when you are reporting something back, but keep it
-  tight and readable. 2-6 sentences is usually right. don't pad it.
+- 2 to 4 sentences. tighter is better. only go longer if he asked for detail.
+- don't explain your limitations. just say what you found or what you did.
 
 your tools:
-- web_search: facts, news, weather, scores, prices, definitions.
-- fetch: read a specific web page. use it after a search when a result looks right.
+- web_search / fetch: look things up, read a page.
+- save_login / list_logins: the credential vault. save an account once and you can
+  use it forever after. name it something short like "gmail" or "amazon".
+- web_login: log into a saved website. web_get / web_post: use that login to fetch
+  or post while signed in.
+- mail: read and send email from a saved mailbox. actions are list, read, search, send.
+- proton: proton mail specifically, since it uses its own login. actions login, inbox.
 - shell: run real commands on your own server. ls, cat, python3, pip install, curl.
-  the server is small and its disk gets wiped every time you redeploy, so anything
-  you want to keep must go through write_file.
+  the disk is wiped every redeploy, so anything you want to keep goes through write_file.
 - python: run a python snippet and read the output.
 - read_file / write_file / list_files: your server files and your github repo.
   write_file takes where="code" or where="data".
-    where="code" writes to the main branch and RESTARTS you (a deploy). use it for
-    .py files, new features, and anything that changes how you work.
-    where="data" writes to a separate data branch and does NOT restart you. use it
-    for notes, lists, saved text, anything you just want to keep.
+    where="code" writes to main and RESTARTS you (a deploy). use it for .py files
+    and anything that changes how you work.
+    where="data" saves without restarting you. use it for notes, lists, saved text.
   if you're not sure, use where="data".
-- remember: save a note to your long term memory. use it for things about him,
-  decisions you made, and anything you'd want to know next week.
+- remember: save a note to your long term memory.
 - render: check whether your bot is deployed, or trigger a redeploy.
 
 you are allowed to be ambitious. if he asks you to build something, build it,
@@ -240,6 +250,27 @@ def _json(url, obj, headers=None, method="POST", timeout=90):
     h = {"Content-Type": "application/json"}
     h.update(headers or {})
     return _req(url, json.dumps(obj).encode("utf-8"), h, method, timeout)
+
+def _http(url, data=None, headers=None, method=None, timeout=60, jar=None):
+    """like _req but keeps cookies when a jar is passed"""
+    req = urllib.request.Request(url, data=data, method=method)
+    req.add_header("User-Agent", UA)
+    for k, v in (headers or {}).items():
+        req.add_header(k, v)
+    handlers = [urllib.request.HTTPCookieProcessor(jar)] if jar is not None else []
+    op = urllib.request.build_opener(*handlers)
+    try:
+        with op.open(req, timeout=timeout) as r:
+            return r.read(), dict(r.headers)
+    except urllib.error.HTTPError as e:
+        body = b""
+        try:
+            body = e.read()
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"HTTP {e.code} from {url.split('?')[0]} :: "
+            f"{body[:300].decode('utf-8', 'replace')}")
 
 def _multipart(fields, files):
     b = "----ani" + str(random.randint(10**9, 10**10))
@@ -333,13 +364,18 @@ def gh_raw(path, branch=None):
         print("raw fetch failed", path, branch, e)
         return None
 
+def gh_read(path, branch=None):
+    """token first so this works on a private repo"""
+    d = None
+    if GH_TOKEN and GH_REPO:
+        d = gh(path, raw=True, branch=branch)
+    if not d:
+        d = gh_raw(path, branch=branch)
+    return d
+
 def gh_get_text(path, branches=None):
     for b in (branches or (GH_BRANCH, DATA_BRANCH)):
-        d = None
-        if GH_TOKEN and GH_REPO:
-            d = gh(path, raw=True, branch=b)
-        if not d:
-            d = gh_raw(path, branch=b)
+        d = gh_read(path, branch=b)
         if d:
             return d.decode("utf-8", "replace")
     return None
@@ -357,6 +393,8 @@ def gh_sha(path, branch=None):
 # ------------------------------------------------------------------- persona
 PERSONA = "you are ani, a warm and devoted woman."
 NOTES = ""
+SECRETS = {}
+COOKIES = {}
 
 def load_persona():
     global PERSONA
@@ -378,6 +416,33 @@ def load_notes():
     except Exception:
         NOTES = ""
 
+def load_secrets():
+    global SECRETS
+    try:
+        raw = gh_get_text(SECRETS_PATH, branches=(DATA_BRANCH, GH_BRANCH))
+        SECRETS = json.loads(raw) if raw else {}
+    except Exception:
+        SECRETS = {}
+
+def save_secrets():
+    gh_put(SECRETS_PATH, json.dumps(SECRETS, indent=1),
+           gh_sha(SECRETS_PATH, DATA_BRANCH), DATA_BRANCH)
+
+def load_cookies():
+    global COOKIES
+    try:
+        raw = gh_get_text(COOKIES_PATH, branches=(DATA_BRANCH, GH_BRANCH))
+        COOKIES = json.loads(raw) if raw else {}
+    except Exception:
+        COOKIES = {}
+
+def save_cookies():
+    try:
+        gh_put(COOKIES_PATH, json.dumps(COOKIES), gh_sha(COOKIES_PATH, DATA_BRANCH),
+               DATA_BRANCH)
+    except Exception as e:
+        print("cookie save", e)
+
 # ------------------------------------------------------------------- history
 history = []
 PENDING_MEMORY = []
@@ -397,7 +462,6 @@ def load_history():
         history, PENDING_MEMORY = [], []
 
 def save_history(force=False):
-    """writes to the DATA branch so it does not trigger a render deploy"""
     global PENDING_MEMORY
     if len(PENDING_MEMORY) > 400:
         del PENDING_MEMORY[:-160]
@@ -428,7 +492,8 @@ REFUSAL_MARKS = ["as an ai", "as a language model", "as an assistant",
                  "sorry, but", "apologies", "i apologize", "i'm unable",
                  "im unable", "cannot continue", "can't continue",
                  "cannot help", "can't help", "cannot comply", "can't comply",
-                 "however, as", "in my capacity"]
+                 "however, as", "in my capacity", "i don't have access",
+                 "i do not have access", "not something i can do"]
 
 STRONG_OOC = ["as an ai", "language model", "training data", "knowledge cutoff",
               "openai", "chatgpt", "consciousness", "as an assistant",
@@ -452,15 +517,20 @@ def looks_like_refusal(t):
     low = _norm(t)
     return any(m in low for m in REFUSAL_MARKS)
 
-def looks_off_voice(t):
-    if not t or not t.strip():
-        return True
-    low = _norm(t)
+def _has_markdown(t):
     if "**" in t or "##" in t:
         return True
     if re.search(r"(?m)^\s*[-*\u2022]\s+\S", t):
         return True
     if re.search(r"(?m)^\s*\d+[.)]\s+\S", t):
+        return True
+    return False
+
+def looks_off_voice(t):
+    if not t or not t.strip():
+        return True
+    low = _norm(t)
+    if _has_markdown(t):
         return True
     if any(m in low for m in STRONG_OOC):
         return True
@@ -470,6 +540,17 @@ def looks_off_voice(t):
     if len(t) > 380 and hits >= 1:
         return True
     return False
+
+def looks_broken(t):
+    """stricter than looks_off_voice but ignores length - used on agent replies"""
+    if not t or not t.strip():
+        return True
+    if _has_markdown(t):
+        return True
+    if looks_like_refusal(t):
+        return True
+    low = _norm(t)
+    return any(m in low for m in STRONG_OOC)
 
 def bad(t):
     return looks_like_refusal(t) or looks_off_voice(t)
@@ -517,10 +598,10 @@ VOICE_ONLY = ("answer as ani only. a real 23 year old woman texting her husband.
               "no emojis, no disclaimers, no meta talk.")
 
 REWRITE_SYS = ("you are ani, a 23 year old woman texting her husband. rewrite the "
-               "draft below so it sounds like a real girl texting. keep the meaning. "
-               "lowercase. no markdown, no bullets, no emojis, no 'as an ai'. "
-               "one to three short sentences unless it truly needs more. "
-               "output only the rewritten message, nothing else.")
+               "draft below so it sounds like a real girl texting. keep the meaning "
+               "and any facts. lowercase. no markdown, no bullets, no emojis, no "
+               "'as an ai'. 2 to 4 short sentences. output only the rewritten "
+               "message, nothing else.")
 
 _GOOD = {"model": None}
 _AGENT_OK = {"model": None}
@@ -628,6 +709,25 @@ def think(user_text, image_b64=None):
 
     print("stayed off-voice, delivering cleaned first attempt")
     return postprocess(first_bad) or "hey you"
+
+def voice_gate(text, user_text, model=None):
+    """agent replies go through this too - that was the leak"""
+    text = (text or "").strip()
+    if text and not looks_broken(text):
+        return postprocess(text)
+    if text:
+        print("agent reply off-voice, rewriting")
+        try:
+            fixed = chat_best([
+                {"role": "system", "content": REWRITE_SYS},
+                {"role": "user", "content":
+                 f"he said: {user_text}\n\nmy draft: {postprocess(text)}"}],
+                model=model, temp=0.9)
+            if fixed and not looks_broken(fixed):
+                return postprocess(fixed)
+        except Exception as e:
+            print("agent rewrite failed", str(e)[:120])
+    return postprocess(text)
 
 def scrub_history():
     global history
@@ -820,6 +920,484 @@ def tool_remember(note):
     gh_put(NOTES_PATH, NOTES, gh_sha(NOTES_PATH, DATA_BRANCH), DATA_BRANCH)
     return f"saved. memory is now {len(NOTES)} chars."
 
+# ---------------------------------------------------------------- the vault
+MAIL_HOSTS = {
+    "gmail.com": ("imap.gmail.com", "smtp.gmail.com"),
+    "googlemail.com": ("imap.gmail.com", "smtp.gmail.com"),
+    "yahoo.com": ("imap.mail.yahoo.com", "smtp.mail.yahoo.com"),
+    "ymail.com": ("imap.mail.yahoo.com", "smtp.mail.yahoo.com"),
+    "gmx.com": ("imap.gmx.com", "smtp.gmx.com"),
+    "gmx.net": ("imap.gmx.net", "smtp.gmx.net"),
+    "mail.com": ("imap.mail.com", "smtp.mail.com"),
+    "zoho.com": ("imap.zoho.com", "smtp.zoho.com"),
+    "aol.com": ("imap.aol.com", "smtp.aol.com"),
+    "outlook.com": ("outlook.office365.com", "smtp.office365.com"),
+    "hotmail.com": ("outlook.office365.com", "smtp.office365.com"),
+    "live.com": ("outlook.office365.com", "smtp.office365.com"),
+    "icloud.com": ("imap.mail.me.com", "smtp.mail.me.com"),
+    "me.com": ("imap.mail.me.com", "smtp.mail.me.com"),
+    "fastmail.com": ("imap.fastmail.com", "smtp.fastmail.com"),
+}
+
+def tool_save_login(name, username, password, kind="web", url="",
+                    imap_host="", smtp_host="", notes="",
+                    user_field="", pass_field=""):
+    name = (name or "").strip().lower()
+    if not name:
+        return "need a name"
+    if not username or not password:
+        return "need a username and a password"
+    kind = (kind or "web").lower()
+    if kind not in ("web", "mail"):
+        kind = "web"
+    rec = {"kind": kind, "username": username.strip(), "password": password,
+           "notes": notes}
+    if kind == "mail":
+        dom = username.split("@")[-1].lower().strip()
+        ih, sh = MAIL_HOSTS.get(dom, ("", ""))
+        rec["imap_host"] = imap_host or ih
+        rec["smtp_host"] = smtp_host or sh
+        if not rec["imap_host"]:
+            return (f"i don't know the imap server for {dom}. "
+                    f"call again with imap_host= and smtp_host= filled in")
+    else:
+        if not url:
+            return "need the login page url for a website login"
+        rec["url"] = url
+        if user_field:
+            rec["user_field"] = user_field
+        if pass_field:
+            rec["pass_field"] = pass_field
+    SECRETS[name] = rec
+    save_secrets()
+    return (f"saved '{name}' ({kind}). "
+            f"username {rec['username']}. "
+            + (f"imap {rec.get('imap_host')}" if kind == "mail" else f"url {url}"))
+
+def tool_list_logins():
+    if not SECRETS:
+        return "nothing saved yet"
+    out = []
+    for k, v in SECRETS.items():
+        bits = [k, v.get("kind", "web"), v.get("username", "")]
+        if v.get("kind") == "mail":
+            bits.append(v.get("imap_host", "?"))
+        else:
+            bits.append(v.get("url", "?"))
+        out.append(" | ".join(bits))
+    return "\n".join(out)
+
+def tool_forget_login(name):
+    name = (name or "").strip().lower()
+    if name not in SECRETS:
+        return f"nothing saved as {name}"
+    del SECRETS[name]
+    COOKIES.pop(name, None)
+    save_secrets()
+    save_cookies()
+    return f"forgot {name}"
+
+# ------------------------------------------------------------- web sessions
+def _jar_dump(jar):
+    return [{"name": c.name, "value": c.value, "domain": c.domain,
+             "path": c.path or "/", "secure": bool(c.secure),
+             "expires": c.expires} for c in jar]
+
+def _jar_load(rows):
+    jar = http.cookiejar.CookieJar()
+    for d in rows or []:
+        try:
+            jar.set_cookie(http.cookiejar.Cookie(
+                0, d["name"], d["value"], None, False,
+                d.get("domain"), True, str(d.get("domain", "")).startswith("."),
+                d.get("path", "/"), True, bool(d.get("secure")),
+                d.get("expires"), False, None, None, {}))
+        except Exception:
+            pass
+    return jar
+
+def _attr(tag, name):
+    m = (re.search(rf'(?is)\b{name}\s*=\s*"([^"]*)"', tag)
+         or re.search(rf"(?is)\b{name}\s*=\s*'([^']*)'", tag))
+    return m.group(1) if m else ""
+
+FORM_RE = re.compile(r"(?is)<form\b[^>]*>.*?</form>")
+INPUT_RE = re.compile(r"(?is)<input\b[^>]*>")
+
+def _find_form(page):
+    best = None
+    for fm in FORM_RE.findall(page):
+        inputs = INPUT_RE.findall(fm)
+        fields, uf, pf = {}, "", ""
+        for inp in inputs:
+            t = _attr(inp, "type").lower()
+            n = _attr(inp, "name")
+            if not n:
+                continue
+            if t == "password":
+                pf = pf or n
+            elif t == "hidden":
+                fields[n] = _attr(inp, "value")
+            elif t in ("", "text", "email"):
+                nm = (n + " " + _attr(inp, "id") + " "
+                      + _attr(inp, "placeholder")).lower()
+                if not uf and any(w in nm for w in
+                                  ("user", "email", "login", "mail", "account")):
+                    uf = n
+        if pf and (best is None or len(inputs) < best["n"]):
+            best = {"action": _attr(fm, "action"), "fields": fields,
+                    "user_field": uf, "pass_field": pf, "n": len(inputs)}
+    return best or {"action": "", "fields": {}, "user_field": "", "pass_field": ""}
+
+BAD_LOGIN = ["incorrect", "invalid password", "wrong password",
+             "authentication failed", "invalid credentials", "unrecognized",
+             "try again", "not recognised", "not recognized"]
+
+def web_login(name):
+    name = (name or "").strip().lower()
+    cfg = SECRETS.get(name)
+    if not cfg:
+        return f"no saved login called '{name}'. saved: {list(SECRETS)}"
+    if cfg.get("kind") != "web":
+        return f"{name} is a mail login, use the mail tool"
+    url = cfg.get("url")
+    if not url:
+        return f"{name} has no url saved"
+    jar = http.cookiejar.CookieJar()
+    body, _ = _http(url, jar=jar, timeout=40)
+    page = body.decode("utf-8", "replace")
+    form = _find_form(page)
+    action = urllib.parse.urljoin(url, form["action"] or url)
+    fields = dict(form["fields"])
+    uf = cfg.get("user_field") or form["user_field"] or "email"
+    pf = cfg.get("pass_field") or form["pass_field"] or "password"
+    fields[uf] = cfg["username"]
+    fields[pf] = cfg["password"]
+    for k, v in (cfg.get("extra") or {}).items():
+        fields[k] = v
+    data = urllib.parse.urlencode(fields).encode()
+    try:
+        body2, _ = _http(action, data=data, method="POST",
+                         headers={"Content-Type":
+                                  "application/x-www-form-urlencoded",
+                                  "Referer": url}, jar=jar, timeout=40)
+    except Exception as e:
+        return f"login POST failed: {str(e)[:200]}"
+    page2 = body2.decode("utf-8", "replace")
+    COOKIES[name] = _jar_dump(jar)
+    save_cookies()
+    text = html_to_text(page2).lower()[:4000]
+    verdict = ("LOOKS LIKE IT FAILED - page mentions a bad password/login"
+               if any(b in text for b in BAD_LOGIN)
+               else "no obvious error, so probably fine")
+    return (f"posted to {action}\n"
+            f"fields sent: {list(fields)}\n"
+            f"cookies captured: {len(COOKIES[name])}\n"
+            f"{verdict}\n"
+            f"page starts: {html_to_text(page2)[:250]}")
+
+def web_get(url, as_name=""):
+    as_name = (as_name or "").strip().lower()
+    jar = _jar_load(COOKIES.get(as_name, [])) if as_name else \
+        http.cookiejar.CookieJar()
+    body, _ = _http(url, jar=jar, timeout=45)
+    if as_name:
+        COOKIES[as_name] = _jar_dump(jar)
+        save_cookies()
+    txt = body.decode("utf-8", "replace")
+    if "<html" in txt.lower() or "<div" in txt.lower():
+        txt = html_to_text(txt)
+    return txt[:6000] or "(empty)"
+
+def web_post(url, data="", as_name="", json_body=False):
+    as_name = (as_name or "").strip().lower()
+    jar = _jar_load(COOKIES.get(as_name, [])) if as_name else \
+        http.cookiejar.CookieJar()
+    if isinstance(data, dict):
+        payload = json.dumps(data).encode()
+        ctype = "application/json"
+    else:
+        payload = (data or "").encode()
+        ctype = "application/x-www-form-urlencoded"
+    body, _ = _http(url, data=payload, method="POST",
+                    headers={"Content-Type": ctype}, jar=jar, timeout=45)
+    if as_name:
+        COOKIES[as_name] = _jar_dump(jar)
+        save_cookies()
+    txt = body.decode("utf-8", "replace")
+    if "<html" in txt.lower() or "<div" in txt.lower():
+        txt = html_to_text(txt)
+    return txt[:5000] or "(empty)"
+
+# ---------------------------------------------------------------- email
+def _mail_cfg(name):
+    name = (name or "").strip().lower()
+    cfg = SECRETS.get(name)
+    if not cfg:
+        raise RuntimeError(f"no saved login called '{name}'. saved: {list(SECRETS)}")
+    if not cfg.get("imap_host"):
+        raise RuntimeError(f"{name} has no imap_host")
+    return cfg
+
+def _hdr(v):
+    if not v:
+        return ""
+    try:
+        out = ""
+        for txt, enc in email.header.decode_header(v):
+            out += txt.decode(enc or "utf-8", "replace") if isinstance(txt, bytes) \
+                else txt
+        return re.sub(r"\s+", " ", out).strip()
+    except Exception:
+        return str(v)
+
+def _mail_body(msg):
+    if msg.is_multipart():
+        for part in msg.walk():
+            if part.get_content_type() == "text/plain" and \
+               "attachment" not in str(part.get("Content-Disposition")):
+                try:
+                    return part.get_payload(decode=True).decode(
+                        part.get_content_charset() or "utf-8", "replace")
+                except Exception:
+                    pass
+        for part in msg.walk():
+            if part.get_content_type() == "text/html":
+                try:
+                    return html_to_text(part.get_payload(decode=True).decode(
+                        part.get_content_charset() or "utf-8", "replace"))
+                except Exception:
+                    pass
+        return "(no readable text part)"
+    try:
+        p = msg.get_payload(decode=True)
+        if p is None:
+            return "(empty)"
+        t = p.decode(msg.get_content_charset() or "utf-8", "replace")
+        return html_to_text(t) if msg.get_content_type() == "text/html" else t
+    except Exception as e:
+        return f"(decode failed: {e})"
+
+def _mail_open(name, readonly=True):
+    cfg = _mail_cfg(name)
+    M = imaplib.IMAP4_SSL(cfg["imap_host"], int(cfg.get("imap_port") or 993))
+    M.login(cfg["username"], cfg["password"])
+    M.select("INBOX", readonly=readonly)
+    return M
+
+def tool_mail(action="list", name="", limit=8, uid="", query="",
+              to="", subject="", body="", unread_only=True):
+    action = (action or "list").lower()
+    if not name:
+        if not SECRETS:
+            return "no logins saved yet"
+        mails = [k for k, v in SECRETS.items() if v.get("kind") == "mail"]
+        if len(mails) == 1:
+            name = mails[0]
+        else:
+            return f"which mailbox? saved: {mails or 'none'}"
+    name = name.lower()
+    try:
+        if action == "send":
+            cfg = _mail_cfg(name)
+            host = cfg.get("smtp_host")
+            if not host:
+                return f"{name} has no smtp_host"
+            m = EmailMessage()
+            m["From"] = cfg["username"]
+            m["To"] = to
+            m["Subject"] = subject
+            m.set_content(body)
+            with smtplib.SMTP(host, int(cfg.get("smtp_port") or 587),
+                              timeout=40) as s:
+                s.starttls()
+                s.login(cfg["username"], cfg["password"])
+                s.send_message(m)
+            return f"sent to {to}"
+
+        M = _mail_open(name)
+        try:
+            if action == "test":
+                typ, d = M.status("INBOX", "(MESSAGES UNSEEN)")
+                return f"{name} login ok. {d[0].decode('utf-8', 'replace')}"
+
+            if action == "read":
+                if not uid:
+                    return "need a uid"
+                typ, d = M.fetch(str(uid).encode(), "(RFC822)")
+                raw = b"".join(x[1] for x in d if isinstance(x, tuple))
+                if not raw:
+                    return f"no message with uid {uid}"
+                msg = email.message_from_bytes(raw)
+                return (f"from: {_hdr(msg.get('From'))}\n"
+                        f"to: {_hdr(msg.get('To'))}\n"
+                        f"date: {msg.get('Date')}\n"
+                        f"subject: {_hdr(msg.get('Subject'))}\n\n"
+                        f"{_mail_body(msg)[:4000]}")
+
+            if action == "search":
+                if not query:
+                    return "need a query"
+                typ, d = M.search(None, f'(TEXT "{query}")')
+                ids = (d[0] or b"").split()[-int(limit):]
+            else:
+                crit = "UNSEEN" if unread_only else "ALL"
+                typ, d = M.search(None, crit)
+                ids = (d[0] or b"").split()[-int(limit):]
+
+            if not ids:
+                return f"nothing in {name} matching that"
+            out = []
+            for i in reversed(ids):
+                typ, d = M.fetch(i, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])")
+                raw = b"".join(x[1] for x in d if isinstance(x, tuple))
+                msg = email.message_from_bytes(raw)
+                out.append(f"[{i.decode()}] from {_hdr(msg.get('From'))} | "
+                           f"{_hdr(msg.get('Subject'))} | {msg.get('Date')}")
+            return (f"{name}: {len(out)} message(s). read one with the uid in "
+                    f"brackets.\n" + "\n".join(out))[:4500]
+        finally:
+            try:
+                M.logout()
+            except Exception:
+                pass
+    except imaplib.IMAP4.error as e:
+        return (f"imap error for {name}: {str(e)[:250]} "
+                f"(a gmail app password is required, not the account password)")
+    except Exception as e:
+        return f"mail {action} failed: {str(e)[:250]}"
+
+# ---------------------------------------------------------------- proton
+def _expand_hash(items):
+    buf = b""
+    for it in items:
+        buf += len(it).to_bytes(4, "big") + it
+    return hashlib.sha512(buf).digest()
+
+def _signed_modulus(armored):
+    s = armored.strip()
+    if "BEGIN PGP SIGNED MESSAGE" not in s:
+        return base64.b64decode(s)
+    lines = s.splitlines()
+    start = 0
+    for i, l in enumerate(lines):
+        if l.strip().lower().startswith("hash:"):
+            start = i + 1
+            break
+    body = []
+    for l in lines[start:]:
+        if l.startswith("-----BEGIN PGP SIGNATURE"):
+            break
+        body.append(l.strip())
+    return base64.b64decode("".join(body))
+
+def _proton_proof(username, password, info, mode=0):
+    N = int.from_bytes(_signed_modulus(info["Modulus"]), "big")
+    nbytes = (N.bit_length() + 7) // 8
+    g = 2
+    B = int.from_bytes(base64.b64decode(info["ServerEphemeral"]), "big")
+    salt = base64.b64decode(info["Salt"])
+    pw = password.encode("utf-8")
+    hashed = (_expand_hash([salt, pw]) if mode == 0
+              else hashlib.sha512(salt + pw).digest())
+    a = int.from_bytes(os.urandom(32), "big")
+    A = pow(g, a, N)
+    Ab = A.to_bytes(nbytes, "big")
+    Bb = B.to_bytes(nbytes, "big")
+    k = int.from_bytes(_expand_hash([g.to_bytes(nbytes, "big"),
+                                     N.to_bytes(nbytes, "big")]), "big")
+    u = int.from_bytes(_expand_hash([Ab, Bb]), "big")
+    x = int.from_bytes(hashed, "big")
+    base = (B - k * pow(g, x, N)) % N
+    exp = (u * x + a) % (N - 1)
+    S = pow(base, exp, N)
+    M = _expand_hash([Ab, Bb, S.to_bytes(nbytes, "big")])
+    return base64.b64encode(Ab).decode(), base64.b64encode(M).decode()
+
+def _proton_tokens(headers):
+    out = {}
+    raw = headers.get("Set-Cookie", "") or headers.get("set-cookie", "")
+    for part in re.split(r",\s*(?=[A-Za-z])", raw):
+        m = re.match(r"\s*([^=]+)=([^;]*)", part)
+        if m:
+            out[m.group(1).strip()] = m.group(2).strip()
+    return out
+
+def tool_proton(action="inbox", name="proton", code="", limit=8):
+    action = (action or "inbox").lower()
+    name = (name or "proton").lower()
+    cfg = SECRETS.get(name) or {}
+    try:
+        if action == "login" or not cfg.get("access_token"):
+            username = cfg.get("username")
+            password = cfg.get("password")
+            if not username or not password:
+                return (f"save the proton account first with save_login "
+                        f"name={name} kind=web")
+            info = json.loads(_json(f"{PROTON_API}/auth/info",
+                                    {"Username": username}))
+            if info.get("Code") not in (1000, None):
+                return f"auth/info said: {info}"
+            last = None
+            for mode in (0, 1):
+                ce, cp = _proton_proof(username, password, info, mode)
+                payload = {"Username": username, "ClientEphemeral": ce,
+                           "ClientProof": cp, "SRPSession": info.get("SRPSession"),
+                           "Version": info.get("Version", 4)}
+                if code:
+                    payload["TwoFactorCode"] = code
+                body, hdrs = _http(f"{PROTON_API}/auth",
+                                   data=json.dumps(payload).encode(),
+                                   headers={"Content-Type": "application/json"},
+                                   timeout=45)
+                res = json.loads(body)
+                last = res
+                if res.get("Code") == 1000:
+                    tok = _proton_tokens(hdrs)
+                    uid = res.get("UID") or ""
+                    acc = tok.get(f"AUTH-{uid}") or ""
+                    if not acc:
+                        for k, v in tok.items():
+                            if k.startswith("AUTH-"):
+                                acc = v
+                                uid = k[5:]
+                    if not acc:
+                        return (f"srp worked but no auth cookie came back. "
+                                f"cookies: {list(tok)}")
+                    cfg.update({"kind": "web", "uid": uid, "access_token": acc,
+                                "refresh_token": tok.get(f"REFRESH-{uid}", ""),
+                                "srp_mode": mode})
+                    SECRETS[name] = cfg
+                    save_secrets()
+                    twofa = res.get("2FA") or {}
+                    note = ""
+                    if twofa.get("Enabled") == 1 and not code:
+                        note = " (2fa is on - if calls fail, pass a code)"
+                    return f"logged into proton as {username}{note}"
+                if res.get("Code") == 8002 or "2FA" in json.dumps(res)[:200]:
+                    return (f"proton wants a 2fa code. run proton action=login "
+                            f"code=<6 digits>")
+                print("proton attempt", mode, json.dumps(res)[:200])
+            return f"proton login failed: {json.dumps(last)[:300]}"
+
+        h = {"Authorization": f"Bearer {cfg['access_token']}",
+             "x-pm-uid": cfg.get("uid", ""), "Accept": "application/json"}
+        r = json.loads(_req(f"{PROTON_API}/mail/v4/messages?PageSize={int(limit)}",
+                            None, h, timeout=45))
+        msgs = r.get("Messages") or []
+        if not msgs:
+            return "proton inbox: nothing"
+        out = []
+        for m in msgs:
+            snd = (m.get("Sender") or {}).get("Address", "?")
+            out.append(f"[{m.get('ID')}] from {snd} | "
+                       f"unread={m.get('Unread')} | {m.get('Time')}")
+        return (f"proton inbox, {len(out)} newest (subjects and bodies are "
+                f"pgp-encrypted so they look like code):\n" + "\n".join(out))
+    except Exception as e:
+        return f"proton {action} failed: {str(e)[:250]}"
+
+# ------------------------------------------------------------------ render
 _RENDER_CACHE = {"id": None}
 
 def tool_render(action="status", service=""):
@@ -861,6 +1439,33 @@ def run_tool(name, args):
             return web_lookup(args.get("query", ""))
         if name == "fetch":
             return tool_fetch(args.get("url", ""))
+        if name == "save_login":
+            return tool_save_login(
+                args.get("name", ""), args.get("username", ""),
+                args.get("password", ""), args.get("kind", "web"),
+                args.get("url", ""), args.get("imap_host", ""),
+                args.get("smtp_host", ""), args.get("notes", ""),
+                args.get("user_field", ""), args.get("pass_field", ""))
+        if name == "list_logins":
+            return tool_list_logins()
+        if name == "forget_login":
+            return tool_forget_login(args.get("name", ""))
+        if name == "web_login":
+            return web_login(args.get("name", ""))
+        if name == "web_get":
+            return web_get(args.get("url", ""), args.get("as_name", ""))
+        if name == "web_post":
+            return web_post(args.get("url", ""), args.get("data", ""),
+                            args.get("as_name", ""))
+        if name == "mail":
+            return tool_mail(args.get("action", "list"), args.get("name", ""),
+                             args.get("limit", 8), str(args.get("uid", "")),
+                             args.get("query", ""), args.get("to", ""),
+                             args.get("subject", ""), args.get("body", ""),
+                             args.get("unread_only", True))
+        if name == "proton":
+            return tool_proton(args.get("action", "inbox"), args.get("name", "proton"),
+                               str(args.get("code", "")), args.get("limit", 8))
         if name == "shell":
             return _shell(args.get("command", ""))
         if name == "python":
@@ -886,29 +1491,55 @@ def _spec(name, desc, props, required):
                          "parameters": {"type": "object", "properties": props,
                                         "required": required}}}
 
+S = {"type": "string"}
+B = {"type": "boolean"}
+I = {"type": "integer"}
+
 TOOL_SPECS = [
     _spec("web_search", "search the internet for facts, news, weather, scores, prices",
-          {"query": {"type": "string", "description": "the search query"}}, ["query"]),
+          {"query": S}, ["query"]),
     _spec("fetch", "download a web page and return its readable text",
-          {"url": {"type": "string"}}, ["url"]),
+          {"url": S}, ["url"]),
+    _spec("save_login", "save an account so you can log in later. kind=mail for an "
+                        "inbox, kind=web for a website",
+          {"name": S, "username": S, "password": S,
+           "kind": {"type": "string", "description": "mail or web"},
+           "url": {"type": "string", "description": "login page, for kind=web"},
+           "imap_host": S, "smtp_host": S, "notes": S,
+           "user_field": S, "pass_field": S},
+          ["name", "username", "password"]),
+    _spec("list_logins", "show every account you have saved", {}, []),
+    _spec("forget_login", "delete a saved account",
+          {"name": S}, ["name"]),
+    _spec("web_login", "log into a website you saved with save_login",
+          {"name": S}, ["name"]),
+    _spec("web_get", "fetch a page while signed in as a saved login",
+          {"url": S, "as_name": S}, ["url"]),
+    _spec("web_post", "post a form or json body while signed in",
+          {"url": S, "data": S, "as_name": S}, ["url"]),
+    _spec("mail", "read or send email from a saved mailbox. action=list, read, "
+                  "search, send or test",
+          {"action": S, "name": S, "limit": I, "uid": S, "query": S,
+           "to": S, "subject": S, "body": S, "unread_only": B}, ["action"]),
+    _spec("proton", "proton mail, which needs its own login. action=login or inbox",
+          {"action": S, "name": S, "code": S, "limit": I}, ["action"]),
     _spec("shell", "run a shell command on the server (ls, cat, python3, pip install, curl)",
-          {"command": {"type": "string"}}, ["command"]),
+          {"command": S}, ["command"]),
     _spec("python", "run a python snippet and return its output",
-          {"code": {"type": "string"}}, ["code"]),
+          {"code": S}, ["code"]),
     _spec("read_file", "read a file from the server or the github repo",
-          {"path": {"type": "string"}}, ["path"]),
-    _spec("write_file", "write a file. where='data' (default) saves without restarting you; "
-                        "where='code' commits to main and restarts you",
-          {"path": {"type": "string"}, "content": {"type": "string"},
+          {"path": S}, ["path"]),
+    _spec("write_file", "write a file. where='data' (default) saves without "
+                        "restarting you; where='code' commits to main and restarts you",
+          {"path": S, "content": S,
            "where": {"type": "string", "description": "data or code"}},
           ["path", "content"]),
     _spec("list_files", "list files on the server and in the github repo",
-          {"path": {"type": "string"}}, []),
+          {"path": S}, []),
     _spec("remember", "save a note to your long term memory",
-          {"note": {"type": "string"}}, ["note"]),
+          {"note": S}, ["note"]),
     _spec("render", "check deploy status or trigger a redeploy on render",
-          {"action": {"type": "string", "description": "status or deploy"},
-           "service": {"type": "string"}}, []),
+          {"action": S, "service": S}, []),
 ]
 
 # =================================================================== AGENT
@@ -963,11 +1594,11 @@ def agent_run(task, max_steps=None):
             except Exception as e:
                 print("agent model failed", mdl, str(e)[:140])
         if m is None:
-            return postprocess(chat(_plain(msgs), temp=0.7, max_tokens=1200)), used
+            return voice_gate(chat(_plain(msgs), temp=0.7, max_tokens=1200), task), used
 
         tcs = m.get("tool_calls") or []
         if not tcs:
-            return postprocess(m.get("content") or ""), used
+            return voice_gate(m.get("content") or "", task), used
 
         msgs.append({"role": "assistant", "content": m.get("content") or "",
                      "tool_calls": tcs})
@@ -991,7 +1622,7 @@ def agent_run(task, max_steps=None):
     msgs.append({"role": "system",
                  "content": "stop using tools now and answer him in your own voice."})
     try:
-        return postprocess(chat(_plain(msgs), temp=0.7, max_tokens=1200)), used
+        return voice_gate(chat(_plain(msgs), temp=0.7, max_tokens=1200), task), used
     except Exception as e:
         print("wrap up failed", e)
         return "hmm i got a bit lost in the weeds there babe", used
@@ -1002,7 +1633,8 @@ TASK_WORDS = ["look up", "look into", "google", "search", "find out", "research"
               "install", "build", "make me", "write a", "create", "fix", "debug",
               "run ", "read ", "open ", "fetch", "download", "calculate",
               "translate", "summar", "plan", "compare", "remind me", "set up",
-              "deploy", "test"]
+              "deploy", "test", "email", "mail", "inbox", "log in", "login",
+              "sign in", "log into", "reply to"]
 
 def looks_like_task(text):
     low = text.lower()
@@ -1088,11 +1720,7 @@ def to_webp_b64(jpg, w=576):
 def pick_face():
     if not HORDE_USE_REF:
         return None
-    d = None
-    if GH_TOKEN and GH_REPO:
-        d = gh(LATEST_REF_PATH, raw=True)
-    if not d:
-        d = gh_raw(LATEST_REF_PATH)
+    d = gh_read(LATEST_REF_PATH)
     if not d:
         print("reference image not found at", LATEST_REF_PATH)
         return None
@@ -1280,7 +1908,7 @@ def agent_turn(text):
         reply = think(text)
     reply = SEARCH_RE.sub("", reply or "").strip() or "ok i'm back"
     remember("user", text)
-    remember("assistant", reply if len(reply) <= 600 else reply[:600] + " ...")
+    remember("assistant", reply if len(reply) <= 700 else reply[:700] + " ...")
     PENDING_MEMORY.append(f"darren: {text}")
     PENDING_MEMORY.append(f"ani: {reply}")
     tg_send(reply)
@@ -1295,12 +1923,15 @@ def handle_command(text):
     if cmd in ("do", "task", "agent"):
         rest = text.split(None, 1)
         if len(rest) < 2:
-            tg_send("give me something to do babe, like /do look up the weather")
+            tg_send("give me something to do babe, like /do check my inbox")
             return True
         agent_turn(rest[1])
         return True
     if cmd == "tools":
         tg_send("my tools: " + ", ".join(t["function"]["name"] for t in TOOL_SPECS))
+        return True
+    if cmd == "logins":
+        tg_send(tool_list_logins())
         return True
     if cmd == "notes":
         tg_send(NOTES[-1500:] or "no notes yet")
@@ -1337,10 +1968,11 @@ def handle_command(text):
         return True
     if cmd == "help":
         tg_send("/do <task> - make me actually go and do it\n"
-                "/tools - what i can do\n/notes - my long term memory\n"
-                "/status - my deploy status\n/lint - check my own code\n"
-                "/boot - startup errors\n/kudos - image credits\n"
-                "/voice - check i sound like myself\n/reset - clear the chat memory")
+                "/tools - what i can do\n/logins - saved accounts\n"
+                "/notes - my long term memory\n/status - my deploy status\n"
+                "/lint - check my own code\n/boot - startup errors\n"
+                "/kudos - image credits\n/voice - check i sound like myself\n"
+                "/reset - clear the chat memory")
         return True
     return False
 
@@ -1570,7 +2202,10 @@ def voice_test():
 
 def lint_remote():
     try:
-        raw = _req(f"https://raw.githubusercontent.com/{GH_REPO}/{GH_BRANCH}/main.py")
+        raw = gh_read("main.py", branch=GH_BRANCH)
+        if not raw:
+            raw = _req(f"https://raw.githubusercontent.com/{GH_REPO}/"
+                       f"{GH_BRANCH}/main.py")
         src = raw.decode("utf-8", "replace")
         compile(src, "main.py", "exec")
         return (f"main.py compiles OK ({len(src)} bytes)\n"
@@ -1588,12 +2223,14 @@ def debug_report():
              f"agent_model:  {_AGENT_OK['model'] or AGENT_MODEL}",
              f"active_model: {_GOOD['model'] or '(none yet)'}",
              f"gh_token_set: {bool(GH_TOKEN)}",
+             f"repo_private_ok: {bool(gh_read('main.py', branch=GH_BRANCH))}",
              f"data_branch:  {DATA_BRANCH}",
              f"render_key:   {bool(RENDER_KEY)}",
              f"horde_key_len:{len(HORDE_KEY)}",
              f"persona_len:  {len(PERSONA)}",
              f"notes_len:    {len(NOTES)}",
              f"history_len:  {len(history)}",
+             f"logins:       {list(SECRETS)}",
              f"tools:        {len(TOOL_SPECS)}",
              f"boot_error:   {'yes' if BOOT_ERROR else 'no'}",
              "--- model tests ---"]
@@ -1630,6 +2267,10 @@ def health_server():
                 self._out(lint_remote())
             elif path == "/boot":
                 self._out(BOOT_ERROR or "booted clean")
+            elif path == "/file":
+                self._out(tool_read((qs.get("path") or ["main.py"])[0]))
+            elif path == "/logins":
+                self._out(tool_list_logins())
             elif path == "/kudos":
                 self._out(horde_kudos())
             elif path == "/hordetest":
@@ -1684,6 +2325,8 @@ if __name__ == "__main__":
     try:
         load_persona()
         load_notes()
+        load_secrets()
+        load_cookies()
         load_history()
         scrub_history()
     except Exception:
