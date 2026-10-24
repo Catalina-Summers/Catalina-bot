@@ -13,7 +13,7 @@ import email, email.header, email.message
 from datetime import datetime
 from email.message import EmailMessage
 
-VERSION = "ani-26"
+VERSION = "ani-27"
 
 # ---------------------------------------------------------------- config
 def env(*names, default=None, required=True):
@@ -103,16 +103,19 @@ HORDE_ANON    = "0000000000"
 HORDE_POLL    = float(os.environ.get("HORDE_POLL_SECONDS", "7"))
 HORDE_POLLS   = int(os.environ.get("HORDE_MAX_POLLS", "150"))
 HORDE_POST    = os.environ.get("HORDE_POST", "")
-HORDE_USE_REF = os.environ.get("HORDE_USE_REF", "1") == "1"
-HORDE_STEPS   = int(os.environ.get("HORDE_STEPS", "22"))
-HORDE_DENOISE = float(os.environ.get("HORDE_DENOISE", "0.75"))
+# v27: reference face OFF by default. it was dictating the crop and the colour
+# scheme of every single photo. /ref on brings it back.
+HORDE_USE_REF = os.environ.get("HORDE_USE_REF", "0") == "1"
+HORDE_STEPS   = int(os.environ.get("HORDE_STEPS", "28"))
+HORDE_DENOISE = float(os.environ.get("HORDE_DENOISE", "0.85"))
+HORDE_CFG     = float(os.environ.get("HORDE_CFG", "5.5"))
 HORDE_SIZES   = [(768, 1152), (640, 960), (512, 768), (448, 640)]
 
-# v26: photographic models only. DreamShaper and AlbedoBase are stylised and
-# were the cause of the off colour grades.
+# v27: ICBINP XL first - it is the most photographic of the three. Juggernaut
+# has the glossy oversaturated house style and was winning by being first.
 HORDE_MODELS = [m.strip() for m in os.environ.get(
     "HORDE_MODELS",
-    "Juggernaut XL,ICBINP XL,RealVisXL V4.0").split(",") if m.strip()]
+    "ICBINP XL,Juggernaut XL,RealVisXL V4.0").split(",") if m.strip()]
 
 MEDIA_COOLDOWN = float(os.environ.get("MEDIA_COOLDOWN", "45"))
 RENDER_KEY = os.environ.get("RENDER_API_KEY", "")
@@ -138,12 +141,16 @@ LOOK = ("23 year old adult woman, early twenties, blue eyes, long straight "
         "blonde hair about 10 inches past her shoulders, soft natural pretty "
         "face, slim curvy figure")
 
-SELFIE_STYLE = (LOOK + ", photorealistic candid smartphone photo, natural skin "
-                "texture, soft natural lighting, shallow depth of field")
+# v27: explicitly ask for even light and matte skin, the opposite of what came out
+SELFIE_STYLE = (LOOK + ", photorealistic photo, natural matte skin with visible "
+                "texture, soft even daylight, no harsh shadows, 50mm lens, "
+                "shallow depth of field")
 
 NEGATIVE = ("lowres, blurry, deformed hands, extra limbs, watermark, text, "
-            "jpeg artifacts, cartoon, plastic skin, over-saturated, "
-            "painting, illustration, child, kid, 3d render")
+            "jpeg artifacts, cartoon, 3d render, painting, illustration, "
+            "child, kid, oversaturated, hdr, neon, split lighting, "
+            "harsh lighting, hard shadows, glossy skin, plastic skin, "
+            "airbrushed, blown highlights, heavy makeup")
 
 # ------------------------------------------------------------ the voice
 STYLE_CARD = """
@@ -333,7 +340,6 @@ def _multipart(fields, files):
     return body, f"multipart/form-data; boundary={b}"
 
 def _sniff(data):
-    """v26: stop labelling everything jpeg, horde sends png and webp too"""
     if data[:8] == b"\x89PNG\r\n\x1a\n":
         return "image/png", "png"
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
@@ -710,7 +716,6 @@ EMOJI_RE = re.compile(
     "\uFE0F\u200D\u2122\u00A9\u00AE]+")
 
 def dedupe_repeat(t):
-    """v26: she occasionally sends the same sentence twice glued together"""
     t = t.strip()
     n = len(t)
     if n < 60:
@@ -2077,7 +2082,7 @@ def horde_kudos():
     try:
         r = json.loads(_req(f"{HORDE_API}/find_user", None, h))
         return (f"kudos: {r.get('kudos')}\nusername: {r.get('username')}\n"
-                f"steps: {HORDE_STEPS}\nmodels: {HORDE_MODELS}")
+                f"steps: {HORDE_STEPS}\ncfg: {HORDE_CFG}\nmodels: {HORDE_MODELS}")
     except Exception as e:
         return f"FAILED: {e}"
 
@@ -2107,7 +2112,8 @@ def generate_image(scene, explicit=False):
     for (w, ht) in HORDE_SIZES:
         w, ht = snap64(w), snap64(ht)
         params = {"width": w, "height": ht, "steps": HORDE_STEPS, "n": 1,
-                  "cfg_scale": 7, "sampler_name": "k_euler_a",
+                  # v27: was 7. lower cfg = less saturation and contrast.
+                  "cfg_scale": HORDE_CFG, "sampler_name": "k_euler_a",
                   "seed": str(random.randint(1, 999999999))}
         if HORDE_POST:
             params["post_processing"] = [p.strip() for p in HORDE_POST.split(",")
@@ -2116,16 +2122,14 @@ def generate_image(scene, explicit=False):
             "prompt": prompt, "negative_prompt": NEGATIVE, "params": params,
             "nsfw": True, "censor_nsfw": False,
             "replacement_filter": True,
-            # v26: False so horde cannot silently swap in degraded settings
             "allow_downgrade": False,
             "r2": True, "models": HORDE_MODELS,
         }
         if face:
             payload["source_image"] = face
             payload["source_processing"] = "img2img"
-            # v26: was 0.60, which let the reference photo drown out his request
             payload["params"]["denoising_strength"] = (
-                min(0.92, HORDE_DENOISE + 0.08) if explicit else HORDE_DENOISE)
+                min(0.95, HORDE_DENOISE + 0.08) if explicit else HORDE_DENOISE)
 
         r, key = None, HORDE_KEY
         for _attempt in range(5):
@@ -2189,13 +2193,14 @@ def generate_image(scene, explicit=False):
     raise RuntimeError(f"horde timeout, queue pos {st.get('queue_position')}")
 
 def build_scene(kind, description):
-    """v26: keep every specific thing he named instead of squashing it to 20 words"""
+    """v27: framing is now compulsory, and his words are kept verbatim-ish"""
     try:
         out = chat([{"role": "system", "content":
                      "turn his message into a stable-diffusion prompt for a photo "
-                     "of a woman. keep EVERY specific thing he named: place, pose, "
-                     "clothing or lack of it, action, props, mood, framing. add a "
-                     "few words of lighting if useful. lowercase, comma separated, "
+                     "of a woman. ALWAYS state the framing first: close-up, medium "
+                     "shot, or full body - use exactly the framing he asked for. "
+                     "then keep EVERY specific thing he named: place, pose, clothing "
+                     "or lack of it, action, props, mood. lowercase, comma separated, "
                      "no preamble, max 35 words. do not mention hair colour or eye "
                      "colour. do not invent a new scene."},
                     {"role": "user", "content": description}],
@@ -2205,13 +2210,13 @@ def build_scene(kind, description):
         return description
 
 def save_canvas(img, scene, kind):
-    """v26: keep the last photo on the repo so it can be inspected afterwards"""
     try:
         gh_put("canvas/last_photo.jpg", img,
                gh_sha("canvas/last_photo.jpg", DATA_BRANCH), DATA_BRANCH)
         gh_put("canvas/last_photo.txt",
                f"{datetime.utcnow().isoformat()}\nkind: {kind}\n"
-               f"models: {HORDE_MODELS}\ndenoise: {HORDE_DENOISE}\n"
+               f"models: {HORDE_MODELS}\nsteps: {HORDE_STEPS}\n"
+               f"cfg: {HORDE_CFG}\ndenoise: {HORDE_DENOISE}\n"
                f"ref: {HORDE_USE_REF}\nprompt: {scene}\n",
                gh_sha("canvas/last_photo.txt", DATA_BRANCH), DATA_BRANCH)
     except Exception as e:
@@ -2421,9 +2426,10 @@ def handle_command(text):
             SETTINGS["use_ref"] = HORDE_USE_REF
             save_settings()
             tg_send(f"reference face {arg.lower()}. "
-                    f"{'photos will keep my face' if HORDE_USE_REF else 'photos will be freer and more varied'}")
+                    f"{'photos will keep my face and framing' if HORDE_USE_REF else 'photos will follow what you ask and use clean even light'}")
         else:
             tg_send(f"reference face is {'on' if HORDE_USE_REF else 'off'}. "
+                    f"off = better colours and framing, on = same face. "
                     f"/ref on or /ref off")
         return True
     if cmd == "voice":
@@ -2764,7 +2770,7 @@ def selftest():
     out.append("apps: " + tool_list_apps()[:160])
     out.append(f"story={STORY['on']} auto_voice={AUTO_VOICE} "
                f"story_voice={VOICE_STORY} ref={HORDE_USE_REF}")
-    out.append(f"models: {HORDE_MODELS}")
+    out.append(f"models={HORDE_MODELS} steps={HORDE_STEPS} cfg={HORDE_CFG}")
     return "\n".join(out)
 
 def debug_report():
@@ -2789,6 +2795,7 @@ def debug_report():
              f"voice:        {TTS_VOICE} (auto {AUTO_VOICE}, story {VOICE_STORY})",
              f"ref_face:     {HORDE_USE_REF}",
              f"horde_models: {HORDE_MODELS}",
+             f"horde_steps:  {HORDE_STEPS}  cfg: {HORDE_CFG}  denoise: {HORDE_DENOISE}",
              f"boot_error:   {'yes' if BOOT_ERROR else 'no'}",
              "--- model tests ---"]
     for m in [CHAT_MODEL] + CHAT_FALLBACKS:
@@ -2854,13 +2861,10 @@ def health_server():
                     self._out(horde_kudos())
                 elif path == "/hordetest":
                     self._out(horde_test())
-                elif path == "/canvas":
-                    self._out("last photo: " + PUBLIC_URL +
-                              "/canvas/last_photo.jpg\n" + tool_list("canvas"))
-                elif path == "/canvas/last_photo.jpg":
+                elif path == "/lastphoto":
                     d = gh_read("canvas/last_photo.jpg", branch=DATA_BRANCH)
                     self._out(d or "none yet", 200 if d else 404, "image/jpeg")
-                elif path == "/canvas/last_photo.txt":
+                elif path == "/lastprompt":
                     d = gh_read("canvas/last_photo.txt", branch=DATA_BRANCH)
                     self._out(d or "none yet")
                 elif path == "/apps":
