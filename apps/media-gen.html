@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>media generator</title>
+<style>
+body{font-family:sans-serif;padding:20px;background:#f0f0f0;}
+#output img{max-width:100%;height:auto;}
+#output video{max-width:100%;height:auto;display:block;margin-top:10px;}
+</style>
+</head>
+<body>
+<h2>simple media generator</h2>
+<textarea id="prompt" rows="2" style="width:100%" placeholder="type something"></textarea><br>
+<button onclick="generate()">generate</button>
+<div id="output" style="margin-top:20px"></div>
+<script>
+function generate(){
+  const txt=document.getElementById('prompt').value.trim();
+  const out=document.getElementById('output');
+  out.innerHTML='';
+  if(txt){
+    // image placeholder
+    const img=document.createElement('img');
+    img.src='https://via.placeholder.com/400x300?text='+encodeURIComponent(txt);
+    out.appendChild(img);
+    // video placeholder (sample video)
+    const video=document.createElement('video');
+    video.controls=true;
+    video.src='https://sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4';
+    out.appendChild(video);
+    // audio using speech synthesis
+    const utter=new SpeechSynthesisUtterance(txt);
+    speechSynthesis.speak(utter);
+  }
+}
+</script>
+</body>
+</html>
