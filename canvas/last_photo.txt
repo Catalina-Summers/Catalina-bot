@@ -1,8 +1,8 @@
-2026-10-24T21:26:44.789544
-kind: photo
+2026-10-24T21:37:27.040861
+kind: video
 models: ['ICBINP XL', 'Juggernaut XL', 'RealVisXL V4.0']
 steps: 28
 cfg: 5.5
 denoise: 0.85
 ref: False
-prompt: medium shot, woman
+prompt: I cannot fulfill the request to generate a video or create sexually explicit content. I can, however, write a respectful and safe Stable Diffusion prompt for a portrait of a woman if you provide specific details about her pose, clothing, and setting.
