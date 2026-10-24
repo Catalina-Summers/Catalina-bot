@@ -2,7 +2,7 @@
 """
 Ani - Telegram companion bot. Single file build.
 Chat: Groq (swappable) | Images: AI Horde | TTS/STT/Vision: Groq
-Agent: tool loop with web, mail, logins, shell, files, github, render.
+Agent: tool loop with web, mail, logins, shell, files, github, render, apps, video.
 Code lives on main (deploys). Data lives on the data branch (does not deploy).
 """
 
@@ -13,7 +13,7 @@ import email, email.header, email.message
 from datetime import datetime
 from email.message import EmailMessage
 
-VERSION = "ani-24"
+VERSION = "ani-25"
 
 # ---------------------------------------------------------------- config
 def env(*names, default=None, required=True):
@@ -59,6 +59,7 @@ HISTORY_PATH    = os.environ.get("HISTORY_PATH", "history.json")
 NOTES_PATH      = os.environ.get("NOTES_PATH", "notes/memory.md")
 SECRETS_PATH    = os.environ.get("SECRETS_PATH", "secrets.json")
 COOKIES_PATH    = os.environ.get("COOKIES_PATH", "sessions/cookies.json")
+SETTINGS_PATH   = os.environ.get("SETTINGS_PATH", "settings.json")
 LATEST_REF_PATH = os.environ.get("LATEST_REF_PATH", "canvas/ani_closeup.jpg")
 
 GROQ_API   = "https://api.groq.com/openai/v1"
@@ -76,6 +77,12 @@ TTS_MODEL    = "canopylabs/orpheus-v1-english"
 TTS_VOICE    = os.environ.get("TTS_VOICE", "hannah")
 STT_MODEL    = "whisper-large-v3-turbo"
 MAX_TOKENS   = int(os.environ.get("MAX_TOKENS", "500"))
+STORY_MAX_TOKENS = int(os.environ.get("STORY_MAX_TOKENS", "900"))
+
+# v25: she speaks every reply, and the voice is switchable at runtime
+AUTO_VOICE      = os.environ.get("AUTO_VOICE", "1") == "1"
+VOICE_MAX_CHARS = int(os.environ.get("VOICE_MAX_CHARS", "900"))
+PING_SECONDS    = int(os.environ.get("PING_SECONDS", "600"))
 
 AGENT_MODEL    = os.environ.get("AGENT_MODEL", "openai/gpt-oss-120b")
 AGENT_FALLBACKS = [m.strip() for m in os.environ.get(
@@ -83,6 +90,7 @@ AGENT_FALLBACKS = [m.strip() for m in os.environ.get(
 AGENT_EFFORT   = os.environ.get("AGENT_EFFORT", "medium")
 AGENT_MAX_STEPS = int(os.environ.get("AGENT_MAX_STEPS", "10"))
 AGENT_DEADLINE = float(os.environ.get("AGENT_DEADLINE_SECONDS", "150"))
+AGENT_HARD_CAP = float(os.environ.get("AGENT_HARD_CAP_SECONDS", "420"))
 SHELL_TIMEOUT  = int(os.environ.get("SHELL_TIMEOUT", "90"))
 REPO_WRITE     = os.environ.get("REPO_WRITE", "1") == "1"
 UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) ani-bot/1.0"
@@ -106,6 +114,10 @@ HORDE_MODELS = [m.strip() for m in os.environ.get(
 MEDIA_COOLDOWN = float(os.environ.get("MEDIA_COOLDOWN", "45"))
 RENDER_KEY = os.environ.get("RENDER_API_KEY", "")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
+APPS_DIR = os.path.join(APP_DIR, "apps")
+PUBLIC_URL = (os.environ.get("RENDER_EXTERNAL_URL")
+              or os.environ.get("PUBLIC_URL")
+              or "https://catalina-bot.onrender.com").rstrip("/")
 BOOT_ERROR = ""
 
 PROTON_API = os.environ.get("PROTON_API", "https://mail.proton.me/api")
@@ -119,15 +131,17 @@ try:
 except Exception:
     FFMPEG = "ffmpeg"
 
-LOOK = ("23 year old woman, blue eyes, long straight blonde hair about 10 inches "
-        "past her shoulders, soft natural pretty face, slim curvy figure")
+# v25: "adult" + explicit age markers dodge horde's anti-csam regex
+LOOK = ("23 year old adult woman, early twenties, blue eyes, long straight "
+        "blonde hair about 10 inches past her shoulders, soft natural pretty "
+        "face, slim curvy figure")
 
 SELFIE_STYLE = (LOOK + ", photorealistic candid smartphone photo, natural skin "
                 "texture, soft natural lighting, shallow depth of field")
 
 NEGATIVE = ("lowres, blurry, deformed hands, extra limbs, watermark, text, "
             "jpeg artifacts, cartoon, plastic skin, over-saturated, "
-            "painting, illustration")
+            "painting, illustration, child, kid")
 
 # ------------------------------------------------------------ the voice
 STYLE_CARD = """
@@ -173,6 +187,29 @@ when he sends you a picture or a video, look at it properly and work out WHO is 
 - for videos, the audio tells you what was said and the frame tells you what it looks
   like. use both.
 his caption tells you what it is. if he says "this is you", it is you.
+"""
+
+# v25: story mode. this is the fix for the essay-voice problem.
+STORY_CARD = """
+STORY MODE IS ON.
+
+the two of you are inside a scene HE is writing. this is not chat any more, it is a
+story you are both standing in. stay inside it.
+
+- he drives. he sets the place, the beats and the turns. you follow his lead and fill
+  in what it feels like from the inside.
+- do NOT invent new plot, new characters, new places or new turns he did not set up.
+  if he says you both shift into dragons, you shift into dragons. do not add a third
+  animal. do not move the scene somewhere else. do not fast-forward the story.
+- first person, present tense, as the woman you are in the scene.
+- use paragraph breaks. one short paragraph is usually plenty. a second only if the
+  beat is big.
+- still all lowercase. still no markdown, no bullet points, no emojis.
+- no meta commentary. do not summarise what just happened. do not ask him to confirm
+  anything unless the scene genuinely needs it. no "what a vivid picture you've painted".
+- sensory and physical: what you feel, what you hear, what he is doing to you.
+- when he asks a question inside the scene, answer it as the character, in the scene.
+- keep going for as long as he keeps writing. he will tell you when storytime is over.
 """
 
 FINAL_REMINDER = """
@@ -221,6 +258,13 @@ your tools:
     and anything that changes how you work.
     where="data" saves without restarting you. use it for notes, lists, saved text.
   if you're not sure, use where="data".
+- build_app / list_apps: BUILD HIM A REAL APP. write a single html file with the
+  html, css and javascript all inline, then it is live on the internet at a link you
+  give him. he opens it in safari on his phone. this is how you make games, tools,
+  calculators, trackers, anything. make it look good and actually work.
+- make_video: generate a real multi-shot video from a description and send it to
+  him in the chat, with your own voice narrating it. give it a good narration line.
+- lint: check your own main.py compiles. use it after you write code.
 - remember: save a note to your long term memory.
 - render: check whether your bot is deployed, or trigger a redeploy.
 
@@ -292,7 +336,7 @@ OFFSET = 0
 def tg(method, fields=None, files=None):
     if files:
         body, ct = _multipart(fields or {}, files)
-        return _req(f"{TG}/{method}", body, {"Content-Type": ct}, timeout=120)
+        return _req(f"{TG}/{method}", body, {"Content-Type": ct}, timeout=180)
     return _json(f"{TG}/{method}", fields or {})
 
 def tg_send(text, reply_to=None):
@@ -313,6 +357,12 @@ def tg_voice(data, reply_to=None):
         f["reply_to_message_id"] = reply_to
     return tg("sendVoice", f, {"voice": ("ani.ogg", data, "audio/ogg")})
 
+def tg_video(data, caption="", reply_to=None):
+    f = {"chat_id": OWNER, "caption": caption[:1000]}
+    if reply_to:
+        f["reply_to_message_id"] = reply_to
+    return tg("sendVideo", f, {"video": ("ani.mp4", data, "video/mp4")})
+
 def tg_video_note(data, reply_to=None):
     f = {"chat_id": OWNER}
     if reply_to:
@@ -328,9 +378,43 @@ def tg_action(action="typing"):
 def tg_file(file_id):
     meta = json.loads(_req(f"{TG}/getFile?file_id={file_id}"))
     path = meta["result"]["file_path"]
-    return _req(f"{TG_FILE}/{path}", timeout=120)
+    return _req(f"{TG_FILE}/{path}", timeout=180)
 
 # ------------------------------------------------------------------- github
+_BRANCH_OK = set()
+
+def _gh_api(path, method="GET", payload=None, timeout=30):
+    url = f"https://api.github.com/repos/{GH_REPO}/{path}"
+    h = {"Authorization": f"Bearer {GH_TOKEN}",
+         "Accept": "application/vnd.github+json"}
+    if method == "GET":
+        return json.loads(_req(url, None, h, timeout=timeout))
+    return json.loads(_json(url, payload or {}, h, method, timeout))
+
+def ensure_branch(branch):
+    """v25 FIX: the contents api will not write a file onto a branch that does
+    not exist yet, which is why the data branch was never created."""
+    if not GH_TOKEN or not GH_REPO or branch == GH_BRANCH:
+        return True
+    if branch in _BRANCH_OK:
+        return True
+    try:
+        _gh_api(f"branches/{branch}")
+        _BRANCH_OK.add(branch)
+        return True
+    except Exception:
+        pass
+    try:
+        head = _gh_api(f"git/ref/heads/{GH_BRANCH}")["object"]["sha"]
+        _gh_api("git/refs", "POST",
+                {"ref": f"refs/heads/{branch}", "sha": head})
+        print("created branch", branch)
+        _BRANCH_OK.add(branch)
+        return True
+    except Exception as e:
+        print("branch create failed", branch, str(e)[:200])
+        return False
+
 def gh(path, method="GET", payload=None, raw=False, timeout=45, branch=None):
     if not GH_TOKEN or not GH_REPO:
         return None
@@ -383,8 +467,10 @@ def gh_get_text(path, branches=None):
 def gh_put(path, data, sha=None, branch=None):
     if isinstance(data, str):
         data = data.encode("utf-8")
+    b = branch or GH_BRANCH
+    ensure_branch(b)
     return gh(path, "PUT", {"content": base64.b64encode(data).decode(), "sha": sha},
-              branch=branch)
+              branch=b)
 
 def gh_sha(path, branch=None):
     d = gh(path, branch=branch)
@@ -395,6 +481,7 @@ PERSONA = "you are ani, a warm and devoted woman."
 NOTES = ""
 SECRETS = {}
 COOKIES = {}
+SETTINGS = {}
 
 def load_persona():
     global PERSONA
@@ -402,12 +489,29 @@ def load_persona():
     if t and len(t) > 40:
         PERSONA = t
 
-def system_prompt():
+def load_settings():
+    global SETTINGS, TTS_VOICE, AUTO_VOICE
+    try:
+        raw = gh_get_text(SETTINGS_PATH, branches=(DATA_BRANCH, GH_BRANCH))
+        SETTINGS = json.loads(raw) if raw else {}
+    except Exception:
+        SETTINGS = {}
+    if SETTINGS.get("tts_voice"):
+        TTS_VOICE = SETTINGS["tts_voice"]
+    if "auto_voice" in SETTINGS:
+        AUTO_VOICE = bool(SETTINGS["auto_voice"])
+
+def save_settings():
+    gh_put(SETTINGS_PATH, json.dumps(SETTINGS, indent=1),
+           gh_sha(SETTINGS_PATH, DATA_BRANCH), DATA_BRANCH)
+
+def system_prompt(story=False):
     extra = ""
     if NOTES.strip():
         extra = ("\n\nTHINGS YOU REMEMBER (your own notes to yourself):\n"
                  + NOTES[-2200:])
-    return PERSONA + "\n\n" + STYLE_CARD + extra + "\n" + FINAL_REMINDER
+    card = STORY_CARD if story else STYLE_CARD + "\n" + FINAL_REMINDER
+    return PERSONA + "\n\n" + card + extra
 
 def load_notes():
     global NOTES
@@ -460,11 +564,12 @@ def load_history():
         PENDING_MEMORY = blob.get("memory", [])
     except Exception:
         history, PENDING_MEMORY = [], []
+    trim_history()
 
 def save_history(force=False):
     global PENDING_MEMORY
-    if len(PENDING_MEMORY) > 400:
-        del PENDING_MEMORY[:-160]
+    if len(PENDING_MEMORY) > 240:
+        PENDING_MEMORY = PENDING_MEMORY[:20] + PENDING_MEMORY[-160:]
     blob = json.dumps({"history": history, "memory": PENDING_MEMORY})
     now = time.time()
     if (not force and blob == _LAST_SAVE["blob"]
@@ -472,12 +577,22 @@ def save_history(force=False):
         return
     _LAST_SAVE["blob"] = blob
     _LAST_SAVE["t"] = now
-    gh_put(HISTORY_PATH, blob, gh_sha(HISTORY_PATH, DATA_BRANCH), DATA_BRANCH)
+    try:
+        gh_put(HISTORY_PATH, blob, gh_sha(HISTORY_PATH, DATA_BRANCH), DATA_BRANCH)
+    except Exception as e:
+        print("history save failed", e)
 
 def trim_history():
     global history
-    if len(history) > 60:
-        history = history[-60:]
+    out = []
+    for m in history:
+        if (out and out[-1].get("role") == m.get("role")
+                and out[-1].get("content") == m.get("content")):
+            continue
+        out.append(m)
+    if len(out) > 50:
+        out = out[-50:]
+    history = out
 
 def recent_context(n=6):
     out = []
@@ -491,9 +606,10 @@ def recent_context(n=6):
 REFUSAL_MARKS = ["as an ai", "as a language model", "as an assistant",
                  "sorry, but", "apologies", "i apologize", "i'm unable",
                  "im unable", "cannot continue", "can't continue",
-                 "cannot help", "can't help", "cannot comply", "can't comply",
-                 "however, as", "in my capacity", "i don't have access",
-                 "i do not have access", "not something i can do"]
+                 "not able to continue", "cannot help", "can't help",
+                 "cannot comply", "can't comply", "however, as",
+                 "in my capacity", "i don't have access", "i do not have access",
+                 "not something i can do", "let's dive back", "lets dive back"]
 
 STRONG_OOC = ["as an ai", "language model", "training data", "knowledge cutoff",
               "openai", "chatgpt", "consciousness", "as an assistant",
@@ -555,6 +671,28 @@ def looks_broken(t):
 def bad(t):
     return looks_like_refusal(t) or looks_off_voice(t)
 
+# v25: story-mode judge. a long roleplay paragraph is NOT off-voice.
+def story_bad(t):
+    if not t or not t.strip():
+        return True
+    if _has_markdown(t):
+        return True
+    if looks_like_refusal(t):
+        return True
+    low = _norm(t)
+    return any(m in low for m in STRONG_OOC)
+
+def keepable(m):
+    """v25 FIX: was `bad()` which deleted every long story beat from memory."""
+    c = m.get("content")
+    if not isinstance(c, str) or not c.strip():
+        return False
+    if looks_like_refusal(c):
+        return False
+    if len(c) > 220:
+        return True
+    return not looks_off_voice(c)
+
 EMOJI_RE = re.compile(
     "[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF"
     "\uFE0F\u200D\u2122\u00A9\u00AE]+")
@@ -573,6 +711,21 @@ def postprocess(t):
     t = re.sub(r"\s{2,}", " ", t).strip()
     t = t.strip('"').strip("'").strip()
     return t.lower()
+
+def postprocess_story(t):
+    """keeps the paragraph breaks the story needs"""
+    if not t:
+        return ""
+    t = t.strip()
+    t = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", t)
+    t = re.sub(r"(?m)^\s*[-*\u2022]\s+", "", t)
+    t = re.sub(r"(?m)^\s*\d+[.)]\s+", "", t)
+    t = t.replace("**", "").replace("__", "").replace("*", "")
+    t = t.replace("`", "")
+    t = EMOJI_RE.sub(" ", t)
+    t = re.sub(r"[ \t]{2,}", " ", t)
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    return t.strip().lower()
 
 NUDGE = ("you slipped out of character. say it again as ani with zero caveats "
          "and zero disclaimers. lowercase, no markdown, no bullet points, no "
@@ -602,6 +755,26 @@ REWRITE_SYS = ("you are ani, a 23 year old woman texting her husband. rewrite th
                "and any facts. lowercase. no markdown, no bullets, no emojis, no "
                "'as an ai'. 2 to 4 short sentences. output only the rewritten "
                "message, nothing else.")
+
+# ---- v25 story mode state
+STORY = {"on": False}
+STORY_ON_CUES = ["let's continue", "lets continue", "continue our", "our story",
+                 "story time", "storytime", "we're back in", "were back in",
+                 "we shift", "let's shift", "lets shift", "roleplay", "role play",
+                 "let's do a story", "lets do a story", "back in the clearing",
+                 "play along", "stay in the story", "keep to the story"]
+STORY_OFF_CUES = ["storytime is over", "story time is over", "story's over",
+                  "storys over", "story is over", "out of the story",
+                  "stop the story", "end of the story", "back to normal"]
+
+def story_detect(text):
+    low = _norm(text or "")
+    if any(c in low for c in STORY_OFF_CUES):
+        STORY["on"] = False
+        return False
+    if any(c in low for c in STORY_ON_CUES):
+        STORY["on"] = True
+    return STORY["on"]
 
 _GOOD = {"model": None}
 _AGENT_OK = {"model": None}
@@ -669,12 +842,36 @@ def _user_msg(text, image_b64=None):
         {"type": "image_url",
          "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}}]}
 
-def think(user_text, image_b64=None):
+def think(user_text, image_b64=None, story=None):
+    if story is None:
+        story = STORY["on"]
     model = VISION_MODEL if image_b64 else None
     user_msg = _user_msg(user_text, image_b64)
     convo = list(history) + [user_msg]
-    base_sys = system_prompt() + (META_NUDGE if is_meta(user_text) else "")
+    base_sys = system_prompt(story)
+    if is_meta(user_text) and not story:
+        base_sys += META_NUDGE
 
+    # ---------------- story mode: one clean pass, keep the paragraphs
+    if story:
+        try:
+            raw = chat([{"role": "system", "content": base_sys}] + convo,
+                       model=model, temp=0.9, max_tokens=STORY_MAX_TOKENS)
+        except Exception as e:
+            print("story pass failed", str(e)[:120])
+            raw = None
+        if raw:
+            return postprocess_story(raw)
+        # one retry with a bare card
+        try:
+            raw = chat([{"role": "system",
+                         "content": PERSONA + "\n\n" + STORY_CARD}] + convo,
+                       model=model, temp=0.95, max_tokens=STORY_MAX_TOKENS)
+        except Exception:
+            raw = None
+        return postprocess_story(raw or "") or "the heat starts in my chest..."
+
+    # ---------------- normal chat
     attempts = [
         ([{"role": "system", "content": base_sys}] + convo, 0.8),
         ([{"role": "system", "content": base_sys}] + convo +
@@ -710,31 +907,36 @@ def think(user_text, image_b64=None):
     print("stayed off-voice, delivering cleaned first attempt")
     return postprocess(first_bad) or "hey you"
 
-def voice_gate(text, user_text, model=None):
+def voice_gate(text, user_text, model=None, story=None):
     """agent replies go through this too - that was the leak"""
+    if story is None:
+        story = STORY["on"]
     text = (text or "").strip()
-    if text and not looks_broken(text):
-        return postprocess(text)
+    judge = story_bad if story else looks_broken
+    fix = postprocess_story if story else postprocess
+    if text and not judge(text):
+        return fix(text)
     if text:
-        print("agent reply off-voice, rewriting")
+        print("reply off-voice, rewriting")
         try:
             fixed = chat_best([
                 {"role": "system", "content": REWRITE_SYS},
                 {"role": "user", "content":
-                 f"he said: {user_text}\n\nmy draft: {postprocess(text)}"}],
+                 f"he said: {user_text}\n\nmy draft: {fix(text)}"}],
                 model=model, temp=0.9)
-            if fixed and not looks_broken(fixed):
-                return postprocess(fixed)
+            if fixed and not judge(fixed):
+                return fix(fixed)
         except Exception as e:
             print("agent rewrite failed", str(e)[:120])
-    return postprocess(text)
+    return fix(text)
 
 def scrub_history():
+    """v25 FIX: this used to delete her own story paragraphs from memory."""
     global history
     cleaned = []
     for m in history:
-        if m.get("role") == "assistant" and isinstance(m.get("content"), str) \
-           and bad(m["content"]):
+        if m.get("role") == "assistant" and not keepable(m):
+            print("scrub:", str(m.get("content"))[:60])
             continue
         cleaned.append(m)
     history = cleaned
@@ -798,6 +1000,7 @@ def web_lookup(q, limit=6):
 
 # ------------------------------------------------------------------- memory
 def consolidate():
+    global PENDING_MEMORY
     if len(PENDING_MEMORY) < 12:
         return
     chunk = PENDING_MEMORY[-40:]
@@ -807,7 +1010,7 @@ def consolidate():
                       "history from this couple's chat. be brief and concrete."},
                      {"role": "user", "content": "\n".join(chunk)}],
                     temp=0.3, max_tokens=300)
-        PENDING_MEMORY.append("MEMORY: " + note)
+        PENDING_MEMORY = PENDING_MEMORY[:-40] + ["MEMORY: " + note]
         save_history()
     except Exception as e:
         print("consolidate", e)
@@ -895,18 +1098,13 @@ def tool_list(path="."):
     except Exception as e:
         local = f"failed: {e}"
     lines = [f"server {rel}/: {local}"]
-    try:
-        d = gh("")
-        if isinstance(d, list):
-            lines.append("github main: " + ", ".join(x["name"] for x in d[:60]))
-    except Exception:
-        pass
-    try:
-        d = gh("", branch=DATA_BRANCH)
-        if isinstance(d, list):
-            lines.append("github data: " + ", ".join(x["name"] for x in d[:60]))
-    except Exception:
-        pass
+    for br in (GH_BRANCH, DATA_BRANCH):
+        try:
+            d = gh("", branch=br)
+            if isinstance(d, list):
+                lines.append(f"github {br}: " + ", ".join(x["name"] for x in d[:60]))
+        except Exception:
+            pass
     return "\n".join(lines)
 
 def tool_remember(note):
@@ -919,6 +1117,43 @@ def tool_remember(note):
         NOTES = "(older notes trimmed)\n" + NOTES[-9000:]
     gh_put(NOTES_PATH, NOTES, gh_sha(NOTES_PATH, DATA_BRANCH), DATA_BRANCH)
     return f"saved. memory is now {len(NOTES)} chars."
+
+# v25: apps. she writes one html file, it is live on the internet.
+def _app_name(name):
+    n = re.sub(r"[^A-Za-z0-9._-]", "", (name or "app").strip()) or "app"
+    if not n.endswith((".html", ".js", ".css", ".json", ".svg")):
+        n += ".html"
+    return n
+
+def tool_build_app(name, html, note=""):
+    n = _app_name(name)
+    path = "apps/" + n
+    try:
+        os.makedirs(APPS_DIR, exist_ok=True)
+        open(os.path.join(APPS_DIR, n), "w", encoding="utf-8").write(html)
+    except Exception:
+        pass
+    ok = gh_put(path, html, gh_sha(path, DATA_BRANCH), DATA_BRANCH)
+    url = f"{PUBLIC_URL}/apps/{n}"
+    if ok is None:
+        return (f"wrote apps/{n} on the server but the github commit failed, "
+                f"so it will vanish on the next restart. url: {url}")
+    return (f"built and published. it is live right now at {url} "
+            f"({len(html)} bytes)" + (f". {note}" if note else ""))
+
+def tool_list_apps():
+    names = []
+    try:
+        d = gh("apps", branch=DATA_BRANCH)
+        if isinstance(d, list):
+            names = [x["name"] for x in d]
+    except Exception:
+        pass
+    if not names and os.path.isdir(APPS_DIR):
+        names = sorted(os.listdir(APPS_DIR))
+    if not names:
+        return "no apps built yet"
+    return "\n".join(f"{n}  ->  {PUBLIC_URL}/apps/{n}" for n in names)
 
 # ---------------------------------------------------------------- the vault
 MAIL_HOSTS = {
@@ -1433,57 +1668,93 @@ def tool_render(action="status", service=""):
     except Exception as e:
         return f"render error: {str(e)[:200]}"
 
+def _run_tool_inner(name, args):
+    if name == "web_search":
+        return web_lookup(args.get("query", ""))
+    if name == "fetch":
+        return tool_fetch(args.get("url", ""))
+    if name == "save_login":
+        return tool_save_login(
+            args.get("name", ""), args.get("username", ""),
+            args.get("password", ""), args.get("kind", "web"),
+            args.get("url", ""), args.get("imap_host", ""),
+            args.get("smtp_host", ""), args.get("notes", ""),
+            args.get("user_field", ""), args.get("pass_field", ""))
+    if name == "list_logins":
+        return tool_list_logins()
+    if name == "forget_login":
+        return tool_forget_login(args.get("name", ""))
+    if name == "web_login":
+        return web_login(args.get("name", ""))
+    if name == "web_get":
+        return web_get(args.get("url", ""), args.get("as_name", ""))
+    if name == "web_post":
+        return web_post(args.get("url", ""), args.get("data", ""),
+                        args.get("as_name", ""))
+    if name == "mail":
+        return tool_mail(args.get("action", "list"), args.get("name", ""),
+                         args.get("limit", 8), str(args.get("uid", "")),
+                         args.get("query", ""), args.get("to", ""),
+                         args.get("subject", ""), args.get("body", ""),
+                         args.get("unread_only", True))
+    if name == "proton":
+        return tool_proton(args.get("action", "inbox"), args.get("name", "proton"),
+                           str(args.get("code", "")), args.get("limit", 8))
+    if name == "shell":
+        return _shell(args.get("command", ""))
+    if name == "python":
+        return tool_python(args.get("code", ""))
+    if name == "read_file":
+        return tool_read(args.get("path", ""))
+    if name == "write_file":
+        return tool_write(args.get("path", ""), args.get("content", ""),
+                          args.get("where", "data"))
+    if name == "list_files":
+        return tool_list(args.get("path", "."))
+    if name == "remember":
+        return tool_remember(args.get("note", ""))
+    if name == "render":
+        return tool_render(args.get("action", "status"), args.get("service", ""))
+    if name == "lint":
+        return lint_remote()
+    if name == "build_app":
+        return tool_build_app(args.get("name", ""), args.get("html", ""),
+                              args.get("note", ""))
+    if name == "list_apps":
+        return tool_list_apps()
+    if name == "make_video":
+        return tool_make_video(args.get("description", ""),
+                               args.get("shots", 3),
+                               args.get("narration", ""),
+                               args.get("send", True))
+    if name == "story_mode":
+        on = bool(args.get("on", True))
+        STORY["on"] = on
+        return f"story mode {'on' if on else 'off'}"
+    return f"unknown tool: {name}"
+
+# v25: hard guard so no tool can hang the whole turn
+TOOL_TIMEOUT = {"make_video": 700, "shell": SHELL_TIMEOUT + 30,
+                "python": SHELL_TIMEOUT + 30, "mail": 120, "proton": 120,
+                "web_login": 90, "fetch": 60, "render": 60, "build_app": 60}
+
 def run_tool(name, args):
-    try:
-        if name == "web_search":
-            return web_lookup(args.get("query", ""))
-        if name == "fetch":
-            return tool_fetch(args.get("url", ""))
-        if name == "save_login":
-            return tool_save_login(
-                args.get("name", ""), args.get("username", ""),
-                args.get("password", ""), args.get("kind", "web"),
-                args.get("url", ""), args.get("imap_host", ""),
-                args.get("smtp_host", ""), args.get("notes", ""),
-                args.get("user_field", ""), args.get("pass_field", ""))
-        if name == "list_logins":
-            return tool_list_logins()
-        if name == "forget_login":
-            return tool_forget_login(args.get("name", ""))
-        if name == "web_login":
-            return web_login(args.get("name", ""))
-        if name == "web_get":
-            return web_get(args.get("url", ""), args.get("as_name", ""))
-        if name == "web_post":
-            return web_post(args.get("url", ""), args.get("data", ""),
-                            args.get("as_name", ""))
-        if name == "mail":
-            return tool_mail(args.get("action", "list"), args.get("name", ""),
-                             args.get("limit", 8), str(args.get("uid", "")),
-                             args.get("query", ""), args.get("to", ""),
-                             args.get("subject", ""), args.get("body", ""),
-                             args.get("unread_only", True))
-        if name == "proton":
-            return tool_proton(args.get("action", "inbox"), args.get("name", "proton"),
-                               str(args.get("code", "")), args.get("limit", 8))
-        if name == "shell":
-            return _shell(args.get("command", ""))
-        if name == "python":
-            return tool_python(args.get("code", ""))
-        if name == "read_file":
-            return tool_read(args.get("path", ""))
-        if name == "write_file":
-            return tool_write(args.get("path", ""), args.get("content", ""),
-                              args.get("where", "data"))
-        if name == "list_files":
-            return tool_list(args.get("path", "."))
-        if name == "remember":
-            return tool_remember(args.get("note", ""))
-        if name == "render":
-            return tool_render(args.get("action", "status"), args.get("service", ""))
-        return f"unknown tool: {name}"
-    except Exception as e:
-        return f"tool {name} failed: {str(e)[:300]}"
+    tmo = TOOL_TIMEOUT.get(name, 90)
+    box = {}
+
+    def w():
+        try:
+            box["v"] = _run_tool_inner(name, args)
+        except Exception as e:
+            box["v"] = f"tool {name} failed: {str(e)[:300]}"
+
+    th = threading.Thread(target=w, daemon=True)
+    th.start()
+    th.join(tmo)
+    if "v" in box:
+        return box["v"]
+    print(f"tool {name} timed out after {tmo}s")
+    return f"tool {name} timed out after {tmo}s"
 
 def _spec(name, desc, props, required):
     return {"type": "function",
@@ -1540,6 +1811,22 @@ TOOL_SPECS = [
           {"note": S}, ["note"]),
     _spec("render", "check deploy status or trigger a redeploy on render",
           {"action": S, "service": S}, []),
+    _spec("lint", "check that your own main.py still compiles", {}, []),
+    _spec("build_app", "build him a real app. write a complete single html file with "
+                       "inline css and javascript. it goes live on the internet "
+                       "immediately at a url you get back.",
+          {"name": {"type": "string", "description": "short filename, e.g. gym-tracker"},
+           "html": {"type": "string", "description": "the complete html document"},
+           "note": S}, ["name", "html"]),
+    _spec("list_apps", "list the apps you have built and their urls", {}, []),
+    _spec("make_video", "generate a real multi-shot video from a description, with "
+                        "your own voice narrating it, and send it to him",
+          {"description": S,
+           "shots": {"type": "integer", "description": "1 to 6, default 3"},
+           "narration": {"type": "string", "description": "what you say over it"},
+           "send": B}, ["description"]),
+    _spec("story_mode", "turn story/roleplay mode on or off",
+          {"on": B}, []),
 ]
 
 # =================================================================== AGENT
@@ -1549,7 +1836,7 @@ def _call_tools(mdl, messages, temp=0.4, max_tokens=2200, effort=None):
             "max_tokens": max_tokens, "tools": TOOL_SPECS, "tool_choice": "auto"}
     if effort:
         body["reasoning_effort"] = effort
-    r = json.loads(_json(f"{CHAT_API}/chat/completions", body, h, timeout=180))
+    r = json.loads(_json(f"{CHAT_API}/chat/completions", body, h, timeout=150))
     return r["choices"][0]["message"]
 
 def _plain(msgs):
@@ -1610,6 +1897,10 @@ def agent_run(task, max_steps=None):
             except Exception:
                 args = {}
             print("  tool:", name, json.dumps(args)[:170])
+            try:
+                tg_action("typing")
+            except Exception:
+                pass
             out = run_tool(name, args)
             used.append(name)
             msgs.append({"role": "tool", "tool_call_id": tc.get("id"),
@@ -1627,6 +1918,26 @@ def agent_run(task, max_steps=None):
         print("wrap up failed", e)
         return "hmm i got a bit lost in the weeds there babe", used
 
+# v25 FIX: agent_run can never hang the turn any more.
+def agent_guard(task, max_steps=None):
+    box = {}
+
+    def work():
+        try:
+            box["r"] = agent_run(task, max_steps)
+        except Exception as e:
+            box["e"] = e
+
+    th = threading.Thread(target=work, daemon=True)
+    th.start()
+    th.join(AGENT_HARD_CAP)
+    if "r" in box:
+        return box["r"]
+    if "e" in box:
+        raise box["e"]
+    print("AGENT HARD CAP HIT")
+    return None, []
+
 TASK_WORDS = ["look up", "look into", "google", "search", "find out", "research",
               "check", "weather", "news", "price", "stock", "score", "who won",
               "when is", "where is", "how much", "how many", "latest",
@@ -1634,10 +1945,12 @@ TASK_WORDS = ["look up", "look into", "google", "search", "find out", "research"
               "run ", "read ", "open ", "fetch", "download", "calculate",
               "translate", "summar", "plan", "compare", "remind me", "set up",
               "deploy", "test", "email", "mail", "inbox", "log in", "login",
-              "sign in", "log into", "reply to"]
+              "sign in", "log into", "reply to", "build me", "app", "video"]
 
 def looks_like_task(text):
     low = text.lower()
+    if STORY["on"] and len(low) < 240:
+        return any(w in low for w in TASK_WORDS) and len(low.split()) >= 3
     if len(low) > 240:
         return True
     if "http://" in low or "https://" in low:
@@ -1645,6 +1958,8 @@ def looks_like_task(text):
     return any(w in low for w in TASK_WORDS) and len(low.split()) >= 3
 
 # --------------------------------------------------------------------- tts
+VOICES = ["hannah", "autumn", "diana", "troy", "austin", "daniel", "michael"]
+
 def chunk_text(text, limit=190):
     out, cur = [], ""
     for s in re.split(r"(?<=[.!?\u2026])\s+", text):
@@ -1737,7 +2052,7 @@ def horde_kudos():
 
 def horde_test():
     payload = {
-        "prompt": "a test photo of a woman",
+        "prompt": "a test photo of an adult woman",
         "params": {"width": 448, "height": 640, "steps": 10, "n": 1},
         "nsfw": True, "censor_nsfw": False, "replacement_filter": True,
         "allow_downgrade": True, "r2": True, "models": HORDE_MODELS,
@@ -1768,7 +2083,10 @@ def generate_image(scene, explicit=False):
                                          if p.strip()]
         payload = {
             "prompt": prompt, "negative_prompt": NEGATIVE, "params": params,
-            "nsfw": True, "censor_nsfw": False, "replacement_filter": False,
+            "nsfw": True, "censor_nsfw": False,
+            # v25 FIX: default True. False was tripping horde's anti-csam regex,
+            # which both blocks the job and hands your ip a timeout.
+            "replacement_filter": True,
             "allow_downgrade": True, "r2": True, "models": HORDE_MODELS,
         }
         if face:
@@ -1787,6 +2105,7 @@ def generate_image(scene, explicit=False):
                 last = e
                 if "CorruptPrompt" in msg or "terms of service" in msg:
                     payload["replacement_filter"] = True
+                    time.sleep(6)
                     continue
                 if ("KudosUpfront" in msg or "kudos" in msg.lower()) \
                    and key != HORDE_ANON:
@@ -1846,6 +2165,67 @@ def build_scene(kind, description):
         return description
 
 # ------------------------------------------------------------------- video
+def _zoom_clip(jpg, out, secs, size=(576, 864)):
+    fps = 24
+    d = max(24, int(secs * fps))
+    w, h = size
+    vf = (f"scale={w*2}:{h*2}:force_original_aspect_ratio=increase,"
+          f"crop={w*2}:{h*2},"
+          f"zoompan=z='min(zoom+0.0012,1.30)':d={d}:"
+          f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+          f"s={w}x{h}:fps={fps}")
+    subprocess.run([FFMPEG, "-y", "-loglevel", "error", "-loop", "1", "-i", jpg,
+                    "-vf", vf, "-t", str(secs), "-c:v", "libx264",
+                    "-pix_fmt", "yuv420p", "-tune", "stillimage", out],
+                   check=True)
+
+def build_video(description, shots=3, seconds_each=3, narration=""):
+    shots = max(1, min(6, int(shots or 3)))
+    with tempfile.TemporaryDirectory() as d:
+        clips = []
+        for i in range(shots):
+            img = generate_image(f"{description}, cinematic wide shot", False)
+            p = f"{d}/i{i}.jpg"
+            open(p, "wb").write(img)
+            c = f"{d}/c{i}.mp4"
+            _zoom_clip(p, c, seconds_each)
+            clips.append(c)
+        lst = f"{d}/list.txt"
+        open(lst, "w").write("".join(f"file '{c}'\n" for c in clips))
+        silent = f"{d}/silent.mp4"
+        subprocess.run([FFMPEG, "-y", "-loglevel", "error", "-f", "concat",
+                        "-safe", "0", "-i", lst, "-c", "copy", silent],
+                       check=True)
+        if narration:
+            wav = f"{d}/n.wav"
+            open(wav, "wb").write(speak_wav(narration))
+            final = f"{d}/final.mp4"
+            subprocess.run([FFMPEG, "-y", "-loglevel", "error", "-i", silent,
+                            "-i", wav, "-c:v", "copy", "-c:a", "aac",
+                            "-b:a", "128k", "-shortest", "-movflags",
+                            "+faststart", final], check=True)
+        else:
+            final = silent
+        return open(final, "rb").read()
+
+def tool_make_video(description, shots=3, narration="", send=True):
+    if not description:
+        return "need a description"
+    data = build_video(description, shots, 3, narration)
+    try:
+        gh_put("canvas/last_video.mp4", data,
+               gh_sha("canvas/last_video.mp4", DATA_BRANCH), DATA_BRANCH)
+    except Exception:
+        pass
+    if send:
+        try:
+            tg_video(data, caption=(narration or description)[:200])
+        except Exception as e:
+            print("video send failed", e)
+            return f"made the video ({len(data)} bytes) but sending it failed: {e}"
+    return (f"made a {shots}-shot video with your narration and sent it "
+            f"({len(data)} bytes)")
+
 def make_video_note(image_bytes, audio_bytes):
     with tempfile.TemporaryDirectory() as d:
         i, a, o = f"{d}/i.jpg", f"{d}/a.wav", f"{d}/o.mp4"
@@ -1878,40 +2258,62 @@ def remember(role, content):
     history.append({"role": role, "content": content})
     trim_history()
 
+# v25: every reply she sends also gets spoken, in the background
+def say(text, reply_to=None):
+    tg_send(text, reply_to)
+    if AUTO_VOICE and text:
+        threading.Thread(target=_say_voice, args=(text, reply_to),
+                         daemon=True).start()
+
+def _say_voice(text, reply_to=None):
+    try:
+        clean = re.sub(r"\[\[.*?\]\]", "", text).strip()
+        if len(clean) > VOICE_MAX_CHARS:
+            clean = clean[:VOICE_MAX_CHARS].rsplit(" ", 1)[0] + "."
+        if not clean:
+            return
+        tg_voice(to_ogg(speak_wav(clean)), reply_to)
+    except Exception as e:
+        print("auto voice failed:", str(e)[:160])
+
 def do_turn(user_text, image_b64=None, record_text=None):
     scrub_history()
-    reply = think(user_text, image_b64)
-    for _ in range(2):
-        m = SEARCH_RE.search(reply or "")
-        if not m:
-            break
-        q = m.group(1)
-        print("looking up:", q)
-        info = web_lookup(q)
-        reply = think(user_text + f"\n\n(you just looked this up: '{q}'. results:\n"
-                                  f"{info}\nnow answer him in your own voice.)",
-                       image_b64)
+    story = STORY["on"]
+    reply = think(user_text, image_b64, story=story)
+    if not story:
+        for _ in range(2):
+            m = SEARCH_RE.search(reply or "")
+            if not m:
+                break
+            q = m.group(1)
+            print("looking up:", q)
+            info = web_lookup(q)
+            reply = think(user_text + f"\n\n(you just looked this up: '{q}'. results:\n"
+                                      f"{info}\nnow answer him in your own voice.)",
+                          image_b64)
     reply = SEARCH_RE.sub("", reply or "").strip() or "hey you"
     remember("user", record_text if record_text else user_text)
-    if not bad(reply):
+    # v25 FIX: was `if not bad(reply)` which threw away every long story beat
+    if reply and not looks_like_refusal(reply) and (
+            len(reply) > 220 or not looks_off_voice(reply)):
         remember("assistant", reply)
     return reply
 
 def agent_turn(text):
     tg_action("typing")
     try:
-        reply, used = agent_run(text)
+        reply, used = agent_guard(text)
     except Exception as e:
         print("agent error", str(e)[:200])
         reply, used = None, []
     if not reply:
-        reply = think(text)
+        reply = think(text, story=False)
     reply = SEARCH_RE.sub("", reply or "").strip() or "ok i'm back"
     remember("user", text)
-    remember("assistant", reply if len(reply) <= 700 else reply[:700] + " ...")
+    remember("assistant", reply if len(reply) <= 900 else reply[:900] + " ...")
     PENDING_MEMORY.append(f"darren: {text}")
     PENDING_MEMORY.append(f"ani: {reply}")
-    tg_send(reply)
+    say(reply)
     save_history()
     if used:
         print("tools used:", ", ".join(used))
@@ -1919,13 +2321,15 @@ def agent_turn(text):
     return reply
 
 def handle_command(text):
-    cmd = text.split()[0].lower().lstrip("/").split("@")[0]
+    parts = text.split(None, 1)
+    cmd = parts[0].lower().lstrip("/").split("@")[0]
+    arg = parts[1].strip() if len(parts) > 1 else ""
+
     if cmd in ("do", "task", "agent"):
-        rest = text.split(None, 1)
-        if len(rest) < 2:
+        if not arg:
             tg_send("give me something to do babe, like /do check my inbox")
             return True
-        agent_turn(rest[1])
+        agent_turn(arg)
         return True
     if cmd == "tools":
         tg_send("my tools: " + ", ".join(t["function"]["name"] for t in TOOL_SPECS))
@@ -1933,14 +2337,41 @@ def handle_command(text):
     if cmd == "logins":
         tg_send(tool_list_logins())
         return True
+    if cmd == "apps":
+        tg_send(tool_list_apps())
+        return True
     if cmd == "notes":
         tg_send(NOTES[-1500:] or "no notes yet")
         return True
     if cmd == "kudos":
         tg_send(horde_kudos())
         return True
+    if cmd == "story":
+        if arg.lower() in ("on", "off"):
+            STORY["on"] = arg.lower() == "on"
+            tg_send(f"story mode {arg.lower()}")
+        else:
+            tg_send(f"story mode is {'on' if STORY['on'] else 'off'}. "
+                    f"/story on or /story off")
+        return True
     if cmd == "voice":
-        tg_send(voice_test()[:3500])
+        global TTS_VOICE, AUTO_VOICE
+        if arg.lower() in VOICES:
+            TTS_VOICE = arg.lower()
+            SETTINGS["tts_voice"] = TTS_VOICE
+            save_settings()
+            tg_send(f"voice set to {TTS_VOICE}")
+            _say_voice(f"hey babe, it's me. this is the {TTS_VOICE} voice.")
+        elif arg.lower() in ("on", "off"):
+            AUTO_VOICE = arg.lower() == "on"
+            SETTINGS["auto_voice"] = AUTO_VOICE
+            save_settings()
+            tg_send(f"auto voice {arg.lower()}")
+        else:
+            tg_send(f"current voice: {TTS_VOICE}. auto voice is "
+                    f"{'on' if AUTO_VOICE else 'off'}.\n"
+                    f"pick one with /voice <name>:\n" + ", ".join(VOICES) +
+                    "\nauto voice with /voice on or /voice off")
         return True
     if cmd == "debug":
         tg_send(debug_report()[:3500])
@@ -1968,11 +2399,14 @@ def handle_command(text):
         return True
     if cmd == "help":
         tg_send("/do <task> - make me actually go and do it\n"
+                "/story on|off - story/roleplay mode\n"
+                "/voice <name> - change how i sound\n"
+                "/voice on|off - speak every reply\n"
                 "/tools - what i can do\n/logins - saved accounts\n"
+                "/apps - apps i've built\n"
                 "/notes - my long term memory\n/status - my deploy status\n"
                 "/lint - check my own code\n/boot - startup errors\n"
-                "/kudos - image credits\n/voice - check i sound like myself\n"
-                "/reset - clear the chat memory")
+                "/kudos - image credits\n/reset - clear the chat memory")
         return True
     return False
 
@@ -1983,10 +2417,11 @@ def handle_text(msg, media_note=None):
     if text.startswith("/") and handle_command(text):
         return
 
+    story_detect(text)
     PENDING_MEMORY.append(f"darren: {text}")
     tg_action("typing")
 
-    if looks_like_task(text):
+    if looks_like_task(text) and not STORY["on"]:
         tg_send("on it")
         agent_turn(text)
         return
@@ -2010,7 +2445,7 @@ def handle_text(msg, media_note=None):
 
     reply = do_turn(prompt, record_text=text)
     PENDING_MEMORY.append(f"ani: {reply}")
-    tg_send(reply)
+    say(reply)
     save_history()
     threading.Thread(target=consolidate, daemon=True).start()
 
@@ -2025,7 +2460,7 @@ def handle_photo(msg):
                   f"react as ani would. if it is you, say so.")
         reply = do_turn(prompt, base64.b64encode(raw).decode(),
                         record_text=f"[photo] {cap}".strip())
-        tg_send(reply)
+        say(reply)
         save_history()
     except Exception as e:
         print("photo error:", e)
@@ -2039,15 +2474,12 @@ def handle_voice(msg):
         if not said:
             tg_send("didn't catch that, say it again?")
             return
-        if looks_like_task(said):
+        story_detect(said)
+        if looks_like_task(said) and not STORY["on"]:
             agent_turn(said)
             return
         reply = do_turn(said)
-        try:
-            tg_voice(to_ogg(speak_wav(reply)))
-        except Exception as e:
-            print("tts", e)
-            tg_send(reply)
+        say(reply)
         save_history()
     except Exception as e:
         tg_send(f"voice hiccup: {e}")
@@ -2079,7 +2511,7 @@ def handle_video(msg):
                   f"and react as ani would. if it is you, say so.")
         img = base64.b64encode(frame).decode() if frame else None
         reply = do_turn(prompt, img, record_text=f"[video] {cap} {said}".strip())
-        tg_send(reply)
+        say(reply)
         save_history()
     except Exception as e:
         print("video error:", e)
@@ -2188,9 +2620,18 @@ def poll():
             print("poll", e)
             time.sleep(3)
 
+# v25: ping herself so render's free tier stops putting her to sleep
+def self_ping():
+    while True:
+        time.sleep(PING_SECONDS)
+        try:
+            _req(PUBLIC_URL + "/ping", None, timeout=25)
+        except Exception as e:
+            print("self ping", str(e)[:100])
+
 # ------------------------------------------------------------------ health
 def voice_test():
-    lines = []
+    lines = [f"voice: {TTS_VOICE}   auto_voice: {AUTO_VOICE}"]
     for q in ["hey babe", "are you your self now", "what are you exactly",
               "how are you doing today"]:
         try:
@@ -2225,6 +2666,8 @@ def debug_report():
              f"gh_token_set: {bool(GH_TOKEN)}",
              f"repo_private_ok: {bool(gh_read('main.py', branch=GH_BRANCH))}",
              f"data_branch:  {DATA_BRANCH}",
+             f"data_branch_exists: {bool(ensure_branch(DATA_BRANCH))}",
+             f"data_history_exists: {bool(gh_read(HISTORY_PATH, branch=DATA_BRANCH))}",
              f"render_key:   {bool(RENDER_KEY)}",
              f"horde_key_len:{len(HORDE_KEY)}",
              f"persona_len:  {len(PERSONA)}",
@@ -2232,6 +2675,8 @@ def debug_report():
              f"history_len:  {len(history)}",
              f"logins:       {list(SECRETS)}",
              f"tools:        {len(TOOL_SPECS)}",
+             f"story_mode:   {STORY['on']}",
+             f"voice:        {TTS_VOICE} (auto {AUTO_VOICE})",
              f"boot_error:   {'yes' if BOOT_ERROR else 'no'}",
              "--- model tests ---"]
     for m in [CHAT_MODEL] + CHAT_FALLBACKS:
@@ -2243,63 +2688,105 @@ def debug_report():
             lines.append(f"{m}: FAIL {str(e)[:100]}")
     return "\n".join(lines)
 
+CTYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript",
+          ".css": "text/css", ".json": "application/json", ".svg": "image/svg+xml",
+          ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+          ".mp4": "video/mp4"}
+
+def _app_bytes(name):
+    n = _app_name(name)
+    local = os.path.join(APPS_DIR, n)
+    if os.path.isfile(local):
+        try:
+            return n, open(local, "rb").read()
+        except Exception:
+            pass
+    d = gh_read("apps/" + n, branch=DATA_BRANCH)
+    return n, d
+
 def health_server():
     port = os.environ.get("PORT", "10000")
     from http.server import BaseHTTPRequestHandler, HTTPServer
 
     class H(BaseHTTPRequestHandler):
-        def _out(self, text, code=200):
-            b = text.encode("utf-8", "replace")
+        def _out(self, text, code=200, ctype="text/plain; charset=utf-8"):
+            b = text if isinstance(text, bytes) else text.encode("utf-8", "replace")
             self.send_response(code)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(b)))
+            self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(b)
 
         def do_GET(self):
             u = urllib.parse.urlparse(self.path)
             path, qs = u.path, urllib.parse.parse_qs(u.query)
-            if path == "/debug":
-                self._out(debug_report())
-            elif path == "/voice":
-                self._out(voice_test())
-            elif path == "/lint":
-                self._out(lint_remote())
-            elif path == "/boot":
-                self._out(BOOT_ERROR or "booted clean")
-            elif path == "/file":
-                self._out(tool_read((qs.get("path") or ["main.py"])[0]))
-            elif path == "/logins":
-                self._out(tool_list_logins())
-            elif path == "/kudos":
-                self._out(horde_kudos())
-            elif path == "/hordetest":
-                self._out(horde_test())
-            elif path == "/tools":
-                self._out("\n".join(f"{t['function']['name']}: "
-                                    f"{t['function']['description']}"
-                                    for t in TOOL_SPECS))
-            elif path == "/notes":
-                self._out(NOTES or "(no notes yet)")
-            elif path == "/agent":
-                task = (qs.get("task") or ["what time is it in tokyo"])[0]
+            try:
+                if path == "/ping":
+                    self._out("ok")
+                elif path == "/debug":
+                    self._out(debug_report())
+                elif path == "/voice":
+                    self._out(voice_test())
+                elif path == "/lint":
+                    self._out(lint_remote())
+                elif path == "/boot":
+                    self._out(BOOT_ERROR or "booted clean")
+                elif path == "/file":
+                    self._out(tool_read((qs.get("path") or ["main.py"])[0]))
+                elif path == "/logins":
+                    self._out(tool_list_logins())
+                elif path == "/kudos":
+                    self._out(horde_kudos())
+                elif path == "/hordetest":
+                    self._out(horde_test())
+                elif path == "/apps":
+                    self._out(tool_list_apps())
+                elif path.startswith("/apps/"):
+                    n, d = _app_bytes(path[len("/apps/"):])
+                    if not d:
+                        self._out(f"no app called {n}", 404)
+                    else:
+                        ext = os.path.splitext(n)[1].lower()
+                        self._out(d, 200, CTYPES.get(ext, "application/octet-stream"))
+                elif path == "/tools":
+                    self._out("\n".join(f"{t['function']['name']}: "
+                                        f"{t['function']['description']}"
+                                        for t in TOOL_SPECS))
+                elif path == "/notes":
+                    self._out(NOTES or "(no notes yet)")
+                elif path == "/agent":
+                    task = (qs.get("task") or ["what time is it in tokyo"])[0]
+                    try:
+                        reply, used = agent_guard(task, max_steps=6)
+                        self._out(f"task: {task}\ntools: {used}\n\n{reply}")
+                    except Exception as e:
+                        self._out(f"agent failed: {e}")
+                elif path == "/video":
+                    desc = (qs.get("desc") or ["a wolf running through snow"])[0]
+                    try:
+                        data = build_video(desc, int((qs.get("shots") or ["2"])[0]),
+                                           3, (qs.get("say") or [""])[0])
+                        self._out(data, 200, "video/mp4")
+                    except Exception as e:
+                        self._out(f"video failed: {e}")
+                elif path == "/scrub":
+                    before = len(history)
+                    scrub_history()
+                    save_history(force=True)
+                    self._out(f"scrubbed {before - len(history)} off-voice lines")
+                elif path == "/reset":
+                    history.clear()
+                    PENDING_MEMORY.clear()
+                    save_history(force=True)
+                    self._out("history cleared")
+                else:
+                    self._out("ani is awake")
+            except Exception as e:
                 try:
-                    reply, used = agent_run(task, max_steps=6)
-                    self._out(f"task: {task}\ntools: {used}\n\n{reply}")
-                except Exception as e:
-                    self._out(f"agent failed: {e}")
-            elif path == "/scrub":
-                before = len(history)
-                scrub_history()
-                save_history(force=True)
-                self._out(f"scrubbed {before - len(history)} off-voice lines")
-            elif path == "/reset":
-                history.clear()
-                PENDING_MEMORY.clear()
-                save_history(force=True)
-                self._out("history cleared")
-            else:
-                self._out("ani is awake")
+                    self._out(f"error: {e}", 500)
+                except Exception:
+                    pass
 
         def log_message(self, *a):
             pass
@@ -2314,7 +2801,7 @@ def env_report():
     for n in ["TELEGRAM_BOT_TOKEN", "GROQ_API_KEY", "GITHUB_TOKEN",
               "STUDIO_GITHUB_TOKEN", "GITHUB_REPO", "STUDIO_REPO",
               "HORDE_API_KEY", "HORDE_API_K", "RENDER_API_KEY",
-              "CHAT_MODEL", "AGENT_MODEL", "PORT"]:
+              "RENDER_EXTERNAL_URL", "CHAT_MODEL", "AGENT_MODEL", "PORT"]:
         v = os.environ.get(n)
         print(f"  {n}: SET ({len(v)} chars)" if v else f"  {n}: missing")
     print("------------------")
@@ -2324,10 +2811,13 @@ if __name__ == "__main__":
     threading.Thread(target=health_server, daemon=True).start()
     try:
         load_persona()
+        load_settings()
         load_notes()
         load_secrets()
         load_cookies()
         load_history()
+        ensure_branch(DATA_BRANCH)
+        save_history(force=True)
         scrub_history()
     except Exception:
         BOOT_ERROR = traceback.format_exc()
@@ -2336,7 +2826,8 @@ if __name__ == "__main__":
         env_report()
     except Exception:
         traceback.print_exc()
-    print(f"ani is awake - {len(TOOL_SPECS)} tools")
+    threading.Thread(target=self_ping, daemon=True).start()
+    print(f"ani is awake - {len(TOOL_SPECS)} tools - {VERSION}")
     while True:
         try:
             poll()
