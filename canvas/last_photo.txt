@@ -1,0 +1,8 @@
+2026-10-24T21:26:44.789544
+kind: photo
+models: ['ICBINP XL', 'Juggernaut XL', 'RealVisXL V4.0']
+steps: 28
+cfg: 5.5
+denoise: 0.85
+ref: False
+prompt: medium shot, woman
