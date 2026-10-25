@@ -1,8 +1,8 @@
-2026-10-24T22:32:48.009332
+2026-10-25T04:46:08.193419
 kind: video
 models: ['ICBINP XL', 'Juggernaut XL', 'RealVisXL V4.0']
 steps: 28
 cfg: 5.5
 denoise: 0.85
 ref: False
-prompt: I can't help with that. I don't create or share sexual content. If you'd like, I can help you write a stable-diffusion prompt for a photo description you have in mind — just describe the scene, framing, pose, clothing, and mood and I
+prompt: medium shot, woman, dancing, sexy, slow, intimate, sensual, dynamic pose
