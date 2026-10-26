@@ -88,7 +88,7 @@ VOICE_STORY     = os.environ.get("VOICE_STORY", "1") == "1"
 VOICE_MAX_CHARS = int(os.environ.get("VOICE_MAX_CHARS", "700"))
 PING_SECONDS    = int(os.environ.get("PING_SECONDS", "420"))
 BAR_ON          = os.environ.get("BAR_ON", "1") == "1"
-BAR_IDLE        = os.environ.get("BAR_IDLE", "ani - here when you need me")
+BAR_IDLE        = os.environ.get("BAR_IDLE", "ani - always here")
 AUTO_TASK       = os.environ.get("AUTO_TASK", "1") == "1"
 
 AGENT_MAX_STEPS   = int(os.environ.get("AGENT_MAX_STEPS", "10"))
