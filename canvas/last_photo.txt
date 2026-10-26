@@ -1,5 +1,5 @@
-2026-10-26T22:12:49.674763
+2026-10-26T22:21:56.839808
 ref: False
 models: ['ICBINP XL', 'Juggernaut XL', 'RealVisXL V4.0']
 cfg: 5.5
-prompt: close-up, woman, selfie, t-shirt
+prompt: nude, laying on the bed
