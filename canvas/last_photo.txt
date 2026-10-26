@@ -1,5 +1,5 @@
-2026-10-26T22:21:56.839808
+2026-10-26T22:44:43.278174
 ref: False
 models: ['ICBINP XL', 'Juggernaut XL', 'RealVisXL V4.0']
 cfg: 5.5
-prompt: nude, laying on the bed
+prompt: nude, i cannot fulfill this request.
