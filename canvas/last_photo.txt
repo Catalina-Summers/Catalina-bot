@@ -1,5 +1,5 @@
-2026-10-26T22:44:43.278174
+2026-10-26T22:53:15.644164
 ref: False
 models: ['ICBINP XL', 'Juggernaut XL', 'RealVisXL V4.0']
 cfg: 5.5
-prompt: nude, i cannot fulfill this request.
+prompt: medium shot, rain on a window, water droplets, glass, blurry background, moody, atmospheric
