@@ -12,7 +12,7 @@ import email, email.header, email.message
 from datetime import datetime
 from email.message import EmailMessage
 
-VERSION = "ani-43"
+VERSION = "ani-44"
 
 # ------------------------------------------------------------------ config
 def env(*names, default=None, required=True):
@@ -101,9 +101,9 @@ SHELL_TIMEOUT     = int(os.environ.get("SHELL_TIMEOUT", "90"))
 REPO_WRITE        = os.environ.get("REPO_WRITE", "1") == "1"
 
 HORDE_API   = "https://aihorde.net/api/v2"
-HORDE_KEY   = (env("HORDE_API_KEY", "HORDE_API_K", "HORDE_KEY", required=False)
-               or env_scan("HORDE") or "0000000000")
 HORDE_ANON  = "0000000000"
+HORDE_KEY   = (env("HORDE_API_KEY", "HORDE_API_K", "HORDE_KEY", required=False)
+               or env_scan("HORDE") or HORDE_ANON)
 HORDE_POLL  = float(os.environ.get("HORDE_POLL_SECONDS", "7"))
 HORDE_WAIT  = float(os.environ.get("HORDE_WAIT_SECONDS", "170"))
 HORDE_STEPS = int(os.environ.get("HORDE_STEPS", "28"))
@@ -642,6 +642,7 @@ _LAST_SAVE = {"blob": None, "t": 0.0}
 def load_all():
     global PERSONA, NOTES, SECRETS, COOKIES, SETTINGS, history, PENDING
     global TTS_VOICE, AUTO_VOICE, VOICE_STORY, BAR_ON, AUTO_TASK, HORDE_REF
+    global HORDE_KEY, DEFAULT_FRAME
     t = gh_text(PERSONA_PATH)
     if t and len(t) > 40:
         PERSONA = t
@@ -673,6 +674,10 @@ def load_all():
                     ("use_ref", "HORDE_REF")):
         if k in SETTINGS:
             globals()[attr] = bool(SETTINGS[k])
+    if SETTINGS.get("horde_key"):
+        HORDE_KEY = SETTINGS["horde_key"]
+    if SETTINGS.get("frame") in FRAMING:
+        DEFAULT_FRAME = SETTINGS["frame"]
     if SETTINGS.get("bar_id"):
         BAR["id"] = SETTINGS["bar_id"]
     trim_history()
@@ -1182,6 +1187,23 @@ def ref_face():
             return base64.b64encode(open(o, "rb").read()).decode()
     except Exception:
         return base64.b64encode(d).decode()
+
+def horde_who(key):
+    try:
+        d = json.loads(_req(f"{HORDE_API}/find_user", None, {"apikey": key},
+                            timeout=25))
+        return f"{d.get('username') or '?'} with {int(d.get('kudos') or 0)} kudos"
+    except Exception as e:
+        print("horde who", str(e)[:120])
+        return None
+
+def horde_status():
+    if HORDE_KEY and HORDE_KEY != HORDE_ANON:
+        w = horde_who(HORDE_KEY)
+        return (f"using my own key - {w}" if w
+                else "key saved but horde didn't recognise it")
+    return ("running anonymous, so i'm last in the queue and i keep giving up. "
+            "register at aihorde.net then send me /horde <key>")
 
 def horde_image(prompt, explicit=False):
     face = ref_face()
@@ -2296,6 +2318,7 @@ BOT_COMMANDS = [
     {"command": "story", "description": "story mode on or off"},
     {"command": "voice", "description": "change how i sound"},
     {"command": "ref", "description": "keep my face in photos or not"},
+    {"command": "horde", "description": "my image queue priority"},
     {"command": "bar", "description": "the status bar at the top"},
     {"command": "autotask", "description": "should chat become a job"},
     {"command": "whoami", "description": "the facts about me"},
@@ -2304,6 +2327,7 @@ BOT_COMMANDS = [
 
 def command(text):
     global TTS_VOICE, AUTO_VOICE, VOICE_STORY, BAR_ON, AUTO_TASK, HORDE_REF
+    global HORDE_KEY, DEFAULT_FRAME
     parts = text.split(None, 1)
     cmd = parts[0].lower().lstrip("/").split("@")[0]
     arg = parts[1].strip() if len(parts) > 1 else ""
@@ -2333,6 +2357,25 @@ def command(text):
             tg_send(f"video failed: {str(e)[:150]}")
         bar_idle()
         return True
+    if cmd == "horde":
+        if arg:
+            key = arg.strip().strip('"').strip("'")
+            if len(key) < 20:
+                tg_send(f"that's {len(key)} chars, a horde key is 32. "
+                        f"copy the whole thing")
+                return True
+            who = horde_who(key)
+            if who is None:
+                tg_send("horde didn't recognise that key. check you copied all of "
+                        "it, then send /horde <key> again")
+                return True
+            HORDE_KEY = key
+            SETTINGS["horde_key"] = key
+            save_settings()
+            tg_send(f"horde key saved. you're {who}. images will be faster now.")
+        else:
+            tg_send(horde_status())
+        return True
     if cmd == "help":
         tg_send("/do <task> - actually go and do it\n"
                 "/photo <scene> - a photo of me right now, full body by default\n"
@@ -2340,6 +2383,8 @@ def command(text):
                 "/story on|off\n"
                 "/voice <name> - hannah autumn diana austin daniel troy\n"
                 "/voice on|off - auto voice\n/ref on|off - my face in photos\n"
+                "/horde <key> - my image queue priority\n"
+                "/frame full|medium|close - default photo framing\n"
                 "/bar on|off - the status bar\n/autotask on|off - should chat become a job\n"
                 "/whoami - the facts about me\n/lint - check my own code\n"
                 "/debug - diagnostics\n/selftest - check everything\n"
@@ -2374,9 +2419,10 @@ def command(text):
                     f"off = better colours, on = same face.")
         return True
     if cmd == "frame":
-        global DEFAULT_FRAME
         if arg.lower() in FRAMING:
             DEFAULT_FRAME = arg.lower()
+            SETTINGS["frame"] = DEFAULT_FRAME
+            save_settings()
             tg_send(f"default photo framing {DEFAULT_FRAME}")
         else:
             tg_send(f"default framing {DEFAULT_FRAME}. pick: full medium close")
@@ -2524,8 +2570,7 @@ def debug_text():
         f"gh token {bool(GH_TOKEN)}", f"render key {bool(RENDER_KEY)}",
         f"data branch {DATA_BRANCH}", f"ref face {HORDE_REF}",
         f"default frame {DEFAULT_FRAME}",
-        f"horde key {'own' if HORDE_KEY != HORDE_ANON else 'anon'} "
-        f"wait {int(HORDE_WAIT)}s",
+        "horde: " + horde_status(),
         f"bar {BAR_ON} id {BAR['id']}", f"autotask {AUTO_TASK}",
         f"story {STORY['on']} voice {TTS_VOICE}", f"logins {list(SECRETS)}",
         f"boot error {'yes' if BOOT_ERROR else 'no'}",
@@ -2554,7 +2599,7 @@ def selftest():
     out.append("github read: " + ("ok" if gh_read("main.py") else "FAILED"))
     out.append("lint: " + t_lint())
     out.append("render: " + t_deploy("status")[:150])
-    out.append(f"horde key {'own' if HORDE_KEY != HORDE_ANON else 'anon'}")
+    out.append("horde: " + horde_status())
     try:
         w = speak_wav("hey babe, checking my voice.")
         out.append(f"tts: ok {len(w)} bytes {TTS_VOICE}")
