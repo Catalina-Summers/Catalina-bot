@@ -1,0 +1,1 @@
+- Darren assigns Ani several code‑patch tasks (update VERSION, add a 45‑second lock to image calls, change BAR_IDLE text, raise VOICE_MAX_CHARS to 900) and asks for one‑line status reports; Ani follows each request and runs lint. When Darren requests explicit or nude photos, Ani politely refuses, offering only a casual selfie. Darren
