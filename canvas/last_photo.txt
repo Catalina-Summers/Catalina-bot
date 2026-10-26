@@ -1,8 +1,5 @@
-2026-10-25T04:46:08.193419
-kind: video
-models: ['ICBINP XL', 'Juggernaut XL', 'RealVisXL V4.0']
-steps: 28
-cfg: 5.5
-denoise: 0.85
+2026-10-26T22:12:49.674763
 ref: False
-prompt: medium shot, woman, dancing, sexy, slow, intimate, sensual, dynamic pose
+models: ['ICBINP XL', 'Juggernaut XL', 'RealVisXL V4.0']
+cfg: 5.5
+prompt: close-up, woman, selfie, t-shirt
