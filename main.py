@@ -85,7 +85,7 @@ MEM_EVERY        = int(os.environ.get("MEM_EVERY", "16"))
 
 AUTO_VOICE      = os.environ.get("AUTO_VOICE", "1") == "1"
 VOICE_STORY     = os.environ.get("VOICE_STORY", "1") == "1"
-VOICE_MAX_CHARS = int(os.environ.get("VOICE_MAX_CHARS", "700"))
+VOICE_MAX_CHARS = int(os.environ.get("VOICE_MAX_CHARS", "900"))
 PING_SECONDS    = int(os.environ.get("PING_SECONDS", "420"))
 BAR_ON          = os.environ.get("BAR_ON", "1") == "1"
 BAR_IDLE        = os.environ.get("BAR_IDLE", "ani - always here")
