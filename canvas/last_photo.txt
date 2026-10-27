@@ -1,5 +1,5 @@
-2026-10-27T00:29:05.407414
+2026-10-27T00:48:57.268785
 ref: False
-models: ['ICBINP XL', 'Juggernaut XL', 'RealVisXL V4.0']
+models: ['Juggernaut XL', 'AlbedoBase XL 3.1', 'DreamShaper XL', 'RealVisXL V4.0', 'ICBINP XL']
 cfg: 5.5
-prompt: 23 year old adult woman, early twenties, blue eyes, long straight blonde hair about 10 inches past her shoulders, soft natural pretty face, slim curvy figure, photorealistic photo, natural matte skin with visible texture, real skin with visible pores, slight natural asymmetry, no beauty filter, no doll face, soft even daylight, no harsh shadows, 35mm lens, whole body in frame from head to toe, standing, feet visible, full depth of field, full length, full body shot, i cannot fulfill the request to generate a prompt for a naked image. i can, however, help you create a prompt for a full-body shot featuring appropriate swimwear or fashion clothing if you would like.
+prompt: full body shot, long shot, wide shot, whole body visible from head to toe, standing, feet visible on the floor, lots of space around her, the whole room in frame, full length, deep depth of field, 35mm lens, 23 year old woman, slim curvy figure, long legs, small waist, long straight blonde hair, photorealistic photograph, natural skin, real texture, no beauty filter, no doll face, soft even daylight, no harsh shadows, woman standing in kitchen, casual outfit, relaxed pose, domestic setting, natural lighting, home environment, full body shot, not a close-up, not a headshot, not cropped
