@@ -12,7 +12,7 @@ import email, email.header, email.message
 from datetime import datetime
 from email.message import EmailMessage
 
-VERSION = "ani-46"
+VERSION = "ani-47"
 
 # ------------------------------------------------------------------ config
 def env(*names, default=None, required=True):
@@ -105,15 +105,15 @@ HORDE_ANON  = "0000000000"
 HORDE_KEY   = (env("HORDE_API_KEY", "HORDE_API_K", "HORDE_KEY", required=False)
                or env_scan("HORDE") or HORDE_ANON)
 HORDE_POLL  = float(os.environ.get("HORDE_POLL_SECONDS", "6"))
-HORDE_WAIT  = float(os.environ.get("HORDE_WAIT_SECONDS", "260"))
-HORDE_STEPS = int(os.environ.get("HORDE_STEPS", "26"))
+HORDE_WAIT  = float(os.environ.get("HORDE_WAIT_SECONDS", "330"))
+HORDE_STEPS = int(os.environ.get("HORDE_STEPS", "22"))
 HORDE_CFG   = float(os.environ.get("HORDE_CFG", "5.5"))
 HORDE_DEN   = float(os.environ.get("HORDE_DENOISE", "0.85"))
 HORDE_REF   = os.environ.get("HORDE_USE_REF", "0") == "1"
 HORDE_MODELS = [m.strip() for m in os.environ.get(
-    "HORDE_MODELS", "Juggernaut XL,AlbedoBase XL 3.1,DreamShaper XL,"
+    "HORDE_MODELS", "Juggernaut XL,AlbedoBase XL 3.1,Cheyenne,DreamShaper XL,"
                     "RealVisXL V4.0,ICBINP XL").split(",") if m.strip()]
-HORDE_SIZES = [(832, 1472), (768, 1344), (768, 1152), (640, 960), (512, 768)]
+HORDE_SIZES = [(768, 1344), (768, 1152), (640, 960), (512, 768)]
 
 POLL_HOST  = os.environ.get("POLL_HOST", "https://image.pollinations.ai/prompt")
 POLL_MODEL = os.environ.get("POLL_MODEL", "flux")
@@ -139,10 +139,10 @@ try:
 except Exception:
     FFMPEG = "ffmpeg"
 
-BODY_WORDS = ("23 year old woman, slim curvy figure, long legs, small waist, long "
+BODY_WORDS = ("23 year old blonde woman, slim figure, natural body proportions, "
+              "long straight blonde hair")
+FACE_WORDS = ("23 year old blonde woman, soft natural pretty face, blue eyes, long "
               "straight blonde hair")
-FACE_WORDS = ("23 year old woman, soft natural pretty face, blue eyes, long straight "
-              "blonde hair")
 BASE_QUALITY = ("photorealistic photograph, natural skin, real texture, no beauty "
                 "filter, no doll face, soft even daylight, no harsh shadows")
 NEGATIVE = ("lowres, blurry, deformed hands, extra limbs, watermark, text, jpeg "
@@ -151,7 +151,8 @@ NEGATIVE = ("lowres, blurry, deformed hands, extra limbs, watermark, text, jpeg 
             "plastic skin, airbrushed, blown highlights, heavy makeup, "
             "close-up, portrait crop, headshot, cropped at the waist, cut off legs, "
             "cropped feet, zoomed in face, doll face, anime face, porcelain skin, "
-            "over-smoothed, fisheye, wide angle distortion")
+            "over-smoothed, fisheye, wide angle distortion, stretched, lanky, "
+            "elongated legs, tiny head")
 
 EXPLICIT_WORDS = ("nude", "naked", "topless", "explicit", "undress", "stripped",
                   "lingerie", "bra", "panties", "underwear", "bare", "sex", "nsfw",
@@ -170,7 +171,7 @@ FRAMING = {
     "close":  ("close-up portrait",
                "head and shoulders, tight framing, shallow depth of field, 85mm lens"),
 }
-FRAME_SIZE = {"full": (832, 1472), "medium": (832, 1216), "close": (896, 1152)}
+FRAME_SIZE = {"full": (768, 1344), "medium": (832, 1216), "close": (896, 1152)}
 
 FRAME_WORDS_FULL = ("full body", "full-body", "fullbody", "whole body", "head to toe",
                     "full length", "top to toe", "entire body", "all of you",
@@ -789,11 +790,11 @@ REFUSALS = ["as an ai", "as a language model", "as an assistant", "sorry, but",
 BAD_REPLY = ("sorry", "i can't", "i cant", "cannot", "unable", "not doing",
              "won't", "wont", "not able", "can not", "couldn't", "couldnt",
              "don't think", "dont think", "not sure", "help with that",
-             "not possible", "haven't", "havent")
+             "not possible", "haven't", "havent", "not happening")
 
 def weak_reply(t):
     low = _norm(t or "")
-    return len(low) < 110 and any(m in low for m in BAD_REPLY)
+    return len(low) < 120 and any(m in low for m in BAD_REPLY)
 
 OOC = ["as an ai", "language model", "training data", "knowledge cutoff", "chatgpt",
        "consciousness", "as an assistant", "ai assistant", "patterns in the data",
@@ -1200,7 +1201,7 @@ def t_deploy(action="status"):
 
 # --------------------------------------------------------------- images
 HORDE_LAST = {"msg": "", "at": 0.0}
-LAST_PROMPT = {"text": "", "at": 0.0}
+LAST_PROMPT = {"text": "", "src": "", "at": 0.0}
 
 def horde_note(msg):
     HORDE_LAST["msg"] = str(msg)[:240]
@@ -1243,7 +1244,7 @@ def horde_status():
         base += f"\nlast image problem: {HORDE_LAST['msg']}"
     return base
 
-def horde_image(prompt, explicit=False, w=832, h=1472):
+def horde_image(prompt, explicit=False, w=768, h=1344):
     face = ref_face()
     sizes = [(w, h)] + [s for s in HORDE_SIZES if s != (w, h)]
     payload_base = {
@@ -1282,7 +1283,7 @@ def horde_image(prompt, explicit=False, w=832, h=1472):
         horde_note(err or "submit failed")
         return None
     hh_ = {"apikey": key, "Client-Agent": "ani:1.0"}
-    t0, i = time.time(), 0
+    t0, i, pos, est = time.time(), 0, None, None
     while time.time() - t0 < HORDE_WAIT:
         time.sleep(HORDE_POLL)
         i += 1
@@ -1292,6 +1293,8 @@ def horde_image(prompt, explicit=False, w=832, h=1472):
             st = json.loads(_req(f"{HORDE_API}/generate/status/{rid}", None, hh_))
         except Exception:
             continue
+        pos = st.get("queue_position", pos)
+        est = st.get("wait_time", est)
         if st.get("faulted"):
             f = str(st.get("faulted"))[:180]
             print("horde faulted:", f)
@@ -1302,14 +1305,15 @@ def horde_image(prompt, explicit=False, w=832, h=1472):
             print(f"horde done in {int(time.time()-t0)}s")
             HORDE_LAST["msg"] = ""
             return _req(gens[0]["img"], timeout=120)
-    print(f"horde gave up after {int(time.time()-t0)}s")
-    horde_note(f"gave up after {int(time.time()-t0)}s (queue too long)")
+    print(f"horde gave up after {int(time.time()-t0)}s queue {pos}")
+    horde_note(f"gave up after {int(time.time()-t0)}s, queue position was {pos} "
+               f"(horde's own estimate {est}s) - not enough kudos")
     return None
 
 _POLL_LOCK = threading.Lock()
 _POLL_LAST = {"t": 0.0}
 
-def pollinations_image(prompt, w=832, hh=1472):
+def pollinations_image(prompt, w=768, hh=1344):
     """free backup. only allows one image every 45s, so we space it out."""
     q = urllib.parse.quote(prompt[:1400])
     neg = urllib.parse.quote(NEGATIVE[:600])
@@ -1341,11 +1345,12 @@ def scene_prompt(desc, label="full body shot", explicit=False):
             {"role": "system", "content":
              f"write a stable-diffusion prompt describing only the CONTENT of a photo "
              f"of a woman. do not use any framing words - no 'close-up', no 'full "
-             f"body', no 'portrait', no 'wide shot'. keep every specific thing he "
-             f"named: place, pose, clothing, action, props, mood. if the shot is a "
-             f"full body, describe the whole outfit and the pose, not her face."
-             f"{nude} lowercase, commas, max 25 words, no preamble. don't mention "
-             f"hair or eye colour."},
+             f"body', no 'portrait', no 'wide shot'. START with the place he named "
+             f"(a kitchen is 'in a kitchen', a bedroom is 'in a bedroom'). then the "
+             f"pose, then what she is wearing or not wearing, then anything else he "
+             f"named. if he named no place, invent a simple one. lowercase, commas, "
+             f"max 25 words, no preamble. don't mention hair or eye colour."
+             f"{nude}"},
             {"role": "user", "content": desc}], temp=0.5, max_tokens=90)
         return strip_framing(clean(out)) or desc
     except Exception:
@@ -1360,7 +1365,8 @@ def build_prompt(scene, explicit=False, frame=""):
         parts.append("nude woman, no clothes, bare skin")
     parts += [BODY_WORDS if f == "full" else FACE_WORDS, BASE_QUALITY, body, label]
     if f == "full":
-        parts.append("not a close-up, not a headshot, not cropped")
+        parts.append("natural proportions, blonde, not a close-up, not a headshot, "
+                     "not cropped")
     return ", ".join(p for p in parts if p)
 
 def render(scene, explicit=False, frame=""):
@@ -1368,16 +1374,18 @@ def render(scene, explicit=False, frame=""):
     prompt = build_prompt(scene, explicit, frame)
     LAST_PROMPT["text"] = prompt
     LAST_PROMPT["at"] = time.time()
-    w, h = FRAME_SIZE.get(f, (832, 1472))
+    w, h = FRAME_SIZE.get(f, (768, 1344))
     try:
         d = horde_image(prompt, explicit, w, h)
         if d:
             print("image from horde")
+            LAST_PROMPT["src"] = "horde"
             return d, prompt
     except Exception as e:
         print("horde image failed", str(e)[:120])
         horde_note(str(e)[:180])
     print("image falling back to pollinations")
+    LAST_PROMPT["src"] = "pollinations"
     return pollinations_image(prompt, w, h), prompt
 
 # --------------------------------------------------------------- video
@@ -1795,7 +1803,7 @@ def run_tool(name, a):
         return f"tool {name} failed: {str(e)[:250]}"
     return f"unknown tool {name}"
 
-TOOL_TIMEOUT = {"video": 900, "image": 500, "shell": SHELL_TIMEOUT + 30,
+TOOL_TIMEOUT = {"video": 900, "image": 600, "shell": SHELL_TIMEOUT + 30,
                 "python": SHELL_TIMEOUT + 30, "mail": 120, "login": 90}
 
 def safe_tool(name, a):
@@ -2111,10 +2119,19 @@ def agent_turn(text):
     except Exception as e:
         print("agent error", str(e)[:180])
         reply, used = None, []
+
     reply = SEARCH_RE.sub("", DO_RE.sub("", reply or "")).strip()
-    # she did the work, so a hedge is just wrong
-    if used and weak_reply(reply):
+    img_job, vid_job = bool(photo_job(text)), bool(video_job(text))
+
+    # a photo or video job ALWAYS ends in a photo or a video, never in a hedge -
+    # however the reply got here and whatever the agent did or didn't do
+    if (img_job or vid_job) and "image" not in used and "video" not in used:
+        reply = media_guard(text, reply, used)
+    if (img_job or vid_job) and (not reply or weak_reply(reply)):
+        reply = "sent you one babe" if img_job else "sent it babe"
+    elif used and weak_reply(reply):
         reply = done_line(used)
+
     if not reply:
         if used:
             reply = done_line(used)
@@ -2218,8 +2235,9 @@ def save_canvas(img, prompt):
         gh_put("canvas/last_photo.jpg", img,
                gh_sha("canvas/last_photo.jpg", DATA_BRANCH), DATA_BRANCH)
         gh_put("canvas/last_photo.txt",
-               f"{datetime.utcnow().isoformat()}\nref: {HORDE_REF}\n"
-               f"models: {HORDE_MODELS}\ncfg: {HORDE_CFG}\nprompt: {prompt}\n",
+               f"{datetime.utcnow().isoformat()}\nsource: {LAST_PROMPT['src']}\n"
+               f"ref: {HORDE_REF}\nmodels: {HORDE_MODELS}\ncfg: {HORDE_CFG}\n"
+               f"prompt: {prompt}\n",
                gh_sha("canvas/last_photo.txt", DATA_BRANCH), DATA_BRANCH)
     except Exception:
         pass
@@ -2448,7 +2466,8 @@ def command(text):
             tg_send(horde_status())
         return True
     if cmd == "prompt":
-        tg_send((LAST_PROMPT["text"] or "no photo yet")[:900])
+        tg_send(f"last photo came from {LAST_PROMPT['src'] or '?'}\n\n"
+                + (LAST_PROMPT["text"] or "no photo yet")[:900])
         return True
     if cmd == "help":
         tg_send("/do <task> - actually go and do it\n"
@@ -2458,7 +2477,7 @@ def command(text):
                 "/voice <name> - hannah autumn diana austin daniel troy\n"
                 "/voice on|off - auto voice\n/ref on|off - my face in photos\n"
                 "/horde <key> - my image queue priority\n"
-                "/prompt - the exact prompt my last photo used\n"
+                "/prompt - the exact prompt my last photo used, and where it came from\n"
                 "/frame full|medium|close - default photo framing\n"
                 "/bar on|off - the status bar\n/autotask on|off - should chat become a job\n"
                 "/whoami - the facts about me\n/lint - check my own code\n"
@@ -2771,7 +2790,8 @@ def server():
                         self.out(d or NOPHOTO, 200, "image/jpeg" if d
                                  else "image/svg+xml")
                 elif p == "/lastprompt":
-                    self.out(LAST_PROMPT["text"] or "no photo yet")
+                    self.out(f"source: {LAST_PROMPT['src']}\n\n"
+                             + (LAST_PROMPT["text"] or "no photo yet"))
                 elif p == "/agent":
                     task = (qs.get("task") or ["what time is it in tokyo"])[0]
                     try:
