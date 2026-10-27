@@ -1,5 +1,5 @@
-2026-10-26T22:53:15.644164
+2026-10-27T00:02:39.901723
 ref: False
 models: ['ICBINP XL', 'Juggernaut XL', 'RealVisXL V4.0']
 cfg: 5.5
-prompt: medium shot, rain on a window, water droplets, glass, blurry background, moody, atmospheric
+prompt: 23 year old adult woman, early twenties, blue eyes, long straight blonde hair about 10 inches past her shoulders, soft natural pretty face, slim curvy figure, photorealistic photo, natural matte skin with visible texture, real skin with visible pores, slight natural asymmetry, no beauty filter, no doll face, soft even daylight, no harsh shadows, 35mm lens, whole body in frame from head to toe, standing, feet visible, full depth of field, full length, full body shot, full body nude, lying on silky pink sheet, seductive pose, soft lighting, intimate expression
