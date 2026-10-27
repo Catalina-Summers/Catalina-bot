@@ -1,6 +1,6 @@
-2026-10-27T01:47:55.787342
-source: pollinations
+2026-10-27T01:55:15.891250
+source: horde
 ref: False
 models: ['Juggernaut XL', 'AlbedoBase XL 3.1', 'Cheyenne', 'DreamShaper XL', 'RealVisXL V4.0', 'ICBINP XL']
 cfg: 5.5
-prompt: full body shot, long shot, wide shot, whole body visible from head to toe, standing, feet visible on the floor, lots of space around her, the whole room in frame, full length, deep depth of field, 35mm lens, 23 year old blonde woman, slim figure, natural body proportions, long straight blonde hair, photorealistic photograph, natural skin, real texture, no beauty filter, no doll face, soft even daylight, no harsh shadows, in a kitchen, standing, wearing a white shirt and blue jeans, full body shot, natural proportions, blonde, not a close-up, not a headshot, not cropped
+prompt: full body shot, long shot, wide shot, whole body visible from head to toe, standing, feet visible on the floor, lots of space around her, the whole room in frame, full length, deep depth of field, 35mm lens, 23 year old blonde woman, slim figure, natural body proportions, long straight blonde hair, photorealistic photograph, natural skin, real texture, no beauty filter, no doll face, soft even daylight, no harsh shadows, in a kitchen, standing, wearing a white shirt, full body shot, natural proportions, blonde, not a close-up, not a headshot, not cropped
