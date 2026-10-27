@@ -1,5 +1,5 @@
-2026-10-27T00:48:57.268785
+2026-10-27T00:50:32.727307
 ref: False
 models: ['Juggernaut XL', 'AlbedoBase XL 3.1', 'DreamShaper XL', 'RealVisXL V4.0', 'ICBINP XL']
 cfg: 5.5
-prompt: full body shot, long shot, wide shot, whole body visible from head to toe, standing, feet visible on the floor, lots of space around her, the whole room in frame, full length, deep depth of field, 35mm lens, 23 year old woman, slim curvy figure, long legs, small waist, long straight blonde hair, photorealistic photograph, natural skin, real texture, no beauty filter, no doll face, soft even daylight, no harsh shadows, woman standing in kitchen, casual outfit, relaxed pose, domestic setting, natural lighting, home environment, full body shot, not a close-up, not a headshot, not cropped
+prompt: full body shot, long shot, wide shot, whole body visible from head to toe, standing, feet visible on the floor, lots of space around her, the whole room in frame, full length, deep depth of field, 35mm lens, nude woman, no clothes, bare skin, 23 year old woman, slim curvy figure, long legs, small waist, long straight blonde hair, photorealistic photograph, natural skin, real texture, no beauty filter, no doll face, soft even daylight, no harsh shadows, nude woman, standing, arms crossed, direct gaze, neutral background, full body shot, not a close-up, not a headshot, not cropped
