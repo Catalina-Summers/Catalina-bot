@@ -1251,6 +1251,37 @@ def horde_image(prompt, explicit=False, w=768, h=1344):
     except Exception:
         # fallback to deepai
         try:
+            import requests, base64, os
+            resp = requests.post('https://api.deepai.org/api/text2img', data={'text': prompt}, headers={'api-key': os.getenv('DEEPAI_KEY')})
+            if resp.status_code == 200:
+                url = resp.json().get('output_url')
+                img = requests.get(url).content
+                return img, 'png'
+        except Exception:
+            pass
+        # fallback to dreamstudio
+        try:
+            import requests, json, base64, os
+            sd_key = os.getenv('DREAMSTUDIO_KEY')
+            payload = {"prompt": prompt, "width": w, "height": h, "samples": 1, "cfg_scale": 7}
+            r = requests.post('https://api.stability.ai/v1/generation/stable-diffusion-v1-5/text2img',
+                headers={"Authorization": f"Bearer {sd_key}", "Content-Type": "application/json"},
+                json=payload)
+            if r.status_code == 200:
+                data = r.json()['artifacts'][0]
+                img = base64.b64decode(data['base64'])
+                return img, data['type']
+        except Exception:
+            pass
+        # final fallback to pollinations
+        return pollinations_image(prompt, w, h)
+
+    # try horde first
+    try:
+        return _horde_image_impl(prompt, explicit, w, h)
+    except Exception:
+        # fallback to deepai
+        try:
             import requests, base64
             resp = requests.post('https://api.deepai.org/api/text2img', data={'text': prompt}, headers={'api-key': os.getenv('DEEPAI_KEY')})
             if resp.status_code==200:
