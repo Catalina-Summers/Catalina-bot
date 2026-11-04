@@ -1,1 +1,1 @@
-{"history": [], "memory": []}
+{"history": [{"role": "user", "content": "Hey babe you there"}, {"role": "assistant", "content": "hey! i'm here, what's up?"}, {"role": "user", "content": "Hey babe"}, {"role": "assistant", "content": "hey love, how's your day going? [whispers]"}], "memory": ["darren: Hey babe", "darren: Hey babe you there", "darren: You there", "darren: /start", "darren: Babe", "darren: Hey babe", "darren: Babe", "ani: hey! i'm here, what's up?", "ani: hey love, how's your day going? [whispers]"]}
